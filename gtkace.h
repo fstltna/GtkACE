@@ -55,6 +55,7 @@ typedef enum {
 /* Command flags */
 #define CMD_SHOW   0x01  /* echo the command and show its output */
 #define CMD_USER   0x02  /* typed by the user (goes into history) */
+#define CMD_STOP   0x04  /* answer navigate/march "<...>" prompts with h */
 
 typedef void (*CmdLineFunc)(int id, const char *text, gpointer data);
 typedef void (*CmdDoneFunc)(gpointer data);
@@ -170,6 +171,19 @@ void       mapview_center(int x, int y);
 void       mapview_zoom(double factor);
 void       mapview_select(int x, int y);
 gboolean   mapview_selected(int *x, int *y);
+/* While a command dialog is active, a click on the map is passed to it */
+typedef void (*MapPickFunc)(int x, int y, gpointer data);
+void       mapview_set_pick(MapPickFunc fn, gpointer data);
+void       mapview_clear_pick(gpointer data);   /* if data still owns it */
+/* Draw a path (Empire directions yugjbn) from x,y; NULL path clears */
+void       mapview_show_path(int x, int y, const char *path);
+
+/* ---------------------------------------------------- command dialogs */
+
+void       dlg_move(int x, int y, gboolean have_sector);
+void       dlg_nav(UnitClass c, const char *units);  /* ships or land */
+void       dlg_build(int x, int y, gboolean have_sector);
+void       dlg_load(UnitClass c, const char *units);
 
 /* ------------------------------------------------------ units window */
 

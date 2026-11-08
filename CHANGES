@@ -1,3 +1,24 @@
+GtkACE 0.4.0 (2026-11-07)
+
+  Command dialogs (Commands menu, and the map's right-click menu):
+  - Move (Ctrl+M): commodity, amount, from and to.  Click the map to
+    pick the sectors.  GtkACE asks the server for the best path and the
+    exact mobility cost ("bestpath" and "test"), shows how much mobility
+    will be left, and draws the path on the map.  Test and Move buttons.
+  - Navigate ships (Ctrl+N) and march land units: click a sector with
+    your units to pick them, then click the destination, or type a
+    route.  The server finds the way; GtkACE stops the units there.
+  - Build (Ctrl+B): ships, land units, planes, nukes, bridge spans and
+    bridge towers.  The type list shows each type's materials, work and
+    cost from the server, and which need more tech than you have.  The
+    kind is chosen from the sector (harbor, headquarters, airfield ...).
+  - Load or unload ships (Ctrl+L) and land units: commodities, planes
+    or land units, showing what the carrier has aboard and what the
+    sector has.
+  - Each dialog shows the exact command it will send.
+  - Right-click a sector: Move From Here, Build Here, and for sectors
+    with your ships or land units, Navigate/March and Load/Unload.
+
 GtkACE 0.3.0 (2026-11-07)
 
   Intelligence on other countries:

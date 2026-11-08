@@ -552,6 +552,13 @@ play_line(int id, const char *text)
         return;
     }
     case C_FLUSH:
+        if (c && (c->flags & CMD_STOP) && text[0] == '<') {
+            /* the end of a navigate or march: stop there */
+            out_text(text, "question");
+            out_text("h", "answer");
+            send_line("h");
+            return;
+        }
         if (c && (c->flags & CMD_SHOW)) {
             g_free(cs.question);
             cs.question = g_strdup(text);

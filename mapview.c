@@ -95,6 +95,12 @@ static struct {
     gboolean pressed, dragging;
     double press_x, press_y, press_cx, press_cy;
     guint press_button;
+    /* dialog that wants map clicks */
+    MapPickFunc pick;
+    gpointer pick_data;
+    /* path being shown */
+    char *path;
+    int path_x, path_y;
 } mv = { NULL, 0, 0, 16.0, FALSE, 0, 0 };
 
 typedef struct { double r, g, b; } RGB;
@@ -188,6 +194,79 @@ draw_text(cairo_t *cr, PangoLayout *lay, const char *t, double x, double y)
     pango_layout_get_pixel_size(lay, &w, &h);
     cairo_move_to(cr, x - w / 2.0, y - h / 2.0);
     pango_cairo_show_layout(cr, lay);
+}
+
+/* Empire's six directions */
+static gboolean
+dir_delta(char d, int *dx, int *dy)
+{
+    switch (g_ascii_tolower(d)) {
+    case 'y': *dx = -1; *dy = -1; return TRUE;
+    case 'u': *dx = 1; *dy = -1; return TRUE;
+    case 'g': *dx = -2; *dy = 0; return TRUE;
+    case 'j': *dx = 2; *dy = 0; return TRUE;
+    case 'b': *dx = -1; *dy = 1; return TRUE;
+    case 'n': *dx = 1; *dy = 1; return TRUE;
+    default: return FALSE;
+    }
+}
+
+static double delta(double a, double b, int size);
+
+/* The path as a line through the hex centres, with a dot at each end */
+static void
+draw_path(cairo_t *cr, int W, int H)
+{
+    double dx = SQRT3_2 * mv.side, dy = 1.5 * mv.side;
+    double px = W / 2.0 + delta(mv.path_x, mv.cx, world_x) * dx;
+    double py = H / 2.0 + delta(mv.path_y, mv.cy, world_y) * dy;
+    int sx, sy;
+
+    cairo_save(cr);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    cairo_set_line_width(cr, MAX(3.0, mv.side / 5));
+    cairo_set_source_rgba(cr, 1, 0.1, 0.6, 0.85);
+    cairo_arc(cr, px, py, MAX(3.0, mv.side / 4), 0, 2 * G_PI);
+    cairo_fill(cr);
+    cairo_move_to(cr, px, py);
+    for (const char *p = mv.path; *p; p++) {
+        if (!dir_delta(*p, &sx, &sy))
+            continue;
+        px += sx * dx;
+        py += sy * dy;
+        cairo_line_to(cr, px, py);
+    }
+    cairo_stroke(cr);
+    cairo_arc(cr, px, py, MAX(4.0, mv.side / 3), 0, 2 * G_PI);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
+void
+mapview_set_pick(MapPickFunc fn, gpointer data)
+{
+    mv.pick = fn;
+    mv.pick_data = data;
+}
+
+void
+mapview_clear_pick(gpointer data)
+{
+    if (mv.pick_data == data) {
+        mv.pick = NULL;
+        mv.pick_data = NULL;
+    }
+}
+
+void
+mapview_show_path(int x, int y, const char *path)
+{
+    g_free(mv.path);
+    mv.path = path && *path ? g_strdup(path) : NULL;
+    mv.path_x = x;
+    mv.path_y = y;
+    mapview_redraw();
 }
 
 static gboolean
@@ -288,6 +367,8 @@ draw(GtkWidget *w, cairo_t *cr, gpointer data)
     }
     g_object_unref(big);
     g_object_unref(small);
+    if (mv.path)
+        draw_path(cr, W, H);
     return TRUE;
 }
 
@@ -427,6 +508,38 @@ designate(GtkMenuItem *item, gpointer data)
     gtk_widget_destroy(dlg);
 }
 
+/* Our units of a class in the selected sector, "3/4" */
+static char *
+units_here(UnitClass c)
+{
+    GPtrArray *a = world_units(c);
+    GString *s = g_string_new(NULL);
+
+    for (guint i = 0; i < a->len; i++) {
+        Unit *u = g_ptr_array_index(a, i);
+
+        if (u->x == mv.sel_x && u->y == mv.sel_y && u->carrier < 0)
+            g_string_append_printf(s, "%s%d", s->len ? "/" : "", u->uid);
+    }
+    return g_string_free(s, FALSE);
+}
+
+static void
+open_dialog(GtkMenuItem *item, gpointer which)
+{
+    char *u = NULL;
+
+    switch (GPOINTER_TO_INT(which)) {
+    case 1: dlg_move(mv.sel_x, mv.sel_y, TRUE); break;
+    case 2: dlg_build(mv.sel_x, mv.sel_y, TRUE); break;
+    case 3: dlg_nav(UC_SHIP, u = units_here(UC_SHIP)); break;
+    case 4: dlg_load(UC_SHIP, u = units_here(UC_SHIP)); break;
+    case 5: dlg_nav(UC_LAND, u = units_here(UC_LAND)); break;
+    case 6: dlg_load(UC_LAND, u = units_here(UC_LAND)); break;
+    }
+    g_free(u);
+}
+
 static void
 center_here(GtkMenuItem *item, gpointer data)
 {
@@ -466,6 +579,10 @@ popup_menu(GdkEvent *ev)
     menu_item(menu, "_Map around here", G_CALLBACK(run_menu_cmd),
               "map %d,%d", TRUE);
     menu_item(menu, "_Designate...", G_CALLBACK(designate), NULL, TRUE);
+    menu_item(menu, "Mo_ve From Here...", G_CALLBACK(open_dialog),
+              GINT_TO_POINTER(1), FALSE);
+    menu_item(menu, "_Build Here...", G_CALLBACK(open_dialog),
+              GINT_TO_POINTER(2), FALSE);
     {
         static const char *unit_cmds[UC_COUNT][2] = {
             { "List S_hips Here", "ship %d,%d" },
@@ -486,6 +603,17 @@ popup_menu(GdkEvent *ev)
             }
             menu_item(menu, unit_cmds[c][0], G_CALLBACK(run_menu_cmd),
                       (gpointer)unit_cmds[c][1], TRUE);
+            if (c == UC_SHIP) {
+                menu_item(menu, "Navigate Ships Here...",
+                          G_CALLBACK(open_dialog), GINT_TO_POINTER(3), FALSE);
+                menu_item(menu, "Load or Unload Ships Here...",
+                          G_CALLBACK(open_dialog), GINT_TO_POINTER(4), FALSE);
+            } else if (c == UC_LAND) {
+                menu_item(menu, "March Land Units Here...",
+                          G_CALLBACK(open_dialog), GINT_TO_POINTER(5), FALSE);
+                menu_item(menu, "Load or Unload Land Units Here...",
+                          G_CALLBACK(open_dialog), GINT_TO_POINTER(6), FALSE);
+            }
         }
     }
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
@@ -536,8 +664,11 @@ button_release(GtkWidget *w, GdkEventButton *ev, gpointer data)
         return FALSE;
     mv.pressed = FALSE;
     if (!mv.dragging && ev->button == 1
-        && pixel_to_sector(ev->x, ev->y, &x, &y))
+        && pixel_to_sector(ev->x, ev->y, &x, &y)) {
         mapview_select(x, y);
+        if (mv.pick)
+            mv.pick(x, y, mv.pick_data);
+    }
     if (mv.dragging) {
         normalise_centre();
         gdk_window_set_cursor(gtk_widget_get_window(w), NULL);

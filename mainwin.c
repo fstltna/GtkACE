@@ -1055,6 +1055,23 @@ act_clear(GtkWidget *w, gpointer d)
     gtk_text_buffer_set_text(mw.buf, "", -1);
 }
 
+/* Commands menu: dialogs start from the selected sector */
+static void
+act_dlg(GtkWidget *w, gpointer which)
+{
+    int x = 0, y = 0;
+    gboolean sel = mapview_selected(&x, &y);
+
+    switch (GPOINTER_TO_INT(which)) {
+    case 1: dlg_move(x, y, sel); break;
+    case 2: dlg_nav(UC_SHIP, NULL); break;
+    case 3: dlg_nav(UC_LAND, NULL); break;
+    case 4: dlg_build(x, y, sel); break;
+    case 5: dlg_load(UC_SHIP, NULL); break;
+    case 6: dlg_load(UC_LAND, NULL); break;
+    }
+}
+
 static void
 act_clear_intel(GtkWidget *w, gpointer d)
 {
@@ -1238,6 +1255,21 @@ build_menus(void)
     add_cmd(m, "Show Land Unit Build _Info", "show land build");
     add_cmd(m, "Show Plane Build In_fo", "show plane build");
 
+    m = add_menu(bar, "_Commands");
+    add_item(m, "_Move...", G_CALLBACK(act_dlg), GINT_TO_POINTER(1), FALSE,
+             "<Control>m");
+    add_item(m, "_Navigate Ships...", G_CALLBACK(act_dlg), GINT_TO_POINTER(2),
+             FALSE, "<Control>n");
+    add_item(m, "M_arch Land Units...", G_CALLBACK(act_dlg),
+             GINT_TO_POINTER(3), FALSE, NULL);
+    add_item(m, "_Build...", G_CALLBACK(act_dlg), GINT_TO_POINTER(4), FALSE,
+             "<Control>b");
+    add_sep(m);
+    add_item(m, "_Load or Unload Ships...", G_CALLBACK(act_dlg),
+             GINT_TO_POINTER(5), FALSE, "<Control>l");
+    add_item(m, "Load or Unload L_and Units...", G_CALLBACK(act_dlg),
+             GINT_TO_POINTER(6), FALSE, NULL);
+
     m = add_menu(bar, "Re_ports");
     add_cmd(m, "_Budget", "budget");
     add_cmd(m, "_Census", "census *");
@@ -1418,6 +1450,7 @@ static const char css[] =
     "label.heading { font-weight: bold; }\n"
     "label.value { font-family: Monospace; }\n"
     "label.units { color: #1a4fb5; padding-bottom: 4px; }\n"
+    "label.preview { font-family: Monospace; color: #1a4fb5; }\n"
     ".statusfield { padding: 1px 6px; }\n";
 
 static GtkWidget *

@@ -56,6 +56,7 @@ activate(GtkApplication *app, gpointer data)
         gtk_window_present(mainwin_window());
         return;
     }
+    scheme_defaults();
     mainwin_new(app);
     out_text(GTKACE_NAME " " GTKACE_VERSION
              " - a client for Wolfpack Empire, based on WinACE.", "notice");

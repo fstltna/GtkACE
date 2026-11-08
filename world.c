@@ -581,4 +581,5 @@ world_load(void)
     g_ptr_array_sort(type_names, by_length);
     load_relations();
     load_intel();
+    scheme_compute();
 }

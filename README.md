@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.6.0):
+Working now (0.7.0):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,
@@ -57,13 +57,17 @@ Working now (0.6.0):
   Fire; Air Mission (fly, drop, paradrop, bomb, recon); Distribute and
   Threshold.  Click the map to fill in sectors and units.  Each dialog
   shows the command it sends.
+* Colour schemes (Ctrl+K), as in WinACE: normal colours of your choice;
+  conditional (e.g. `des=k&civ#0`, in Empire's syntax); graduated by any
+  value, optionally showing the values; and distribution, with lines to
+  distribution sectors.  A legend on the map explains the colours.
 * Offline mode: open a game's saved map without connecting
 * Report menus and toolbar (budget, census, nation, news, power, report,
   starvation, wire, relations, maps and more)
 
 Planned for later milestones: more intelligence sources (radar maps,
 recon and satellite pictures, attack and battle reports); the report
-windows; colour schemes; and WinACE's tools
+windows and WinACE's tools
 (production, build projection, famine relief, fortify, range table ...).
 
 ## Building

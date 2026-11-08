@@ -866,6 +866,7 @@ mainwin_set_game(const Game *g, gboolean connect)
     }
     g_free(path);
     db_set_setting("country", g->country);
+    scheme_load();
     world_load();
     units_window_refresh();
     mapview_center(0, 0);
@@ -1103,6 +1104,16 @@ mail_clicked(GtkWidget *w, GdkEventButton *ev, gpointer d)
 }
 
 static void
+act_scheme(GtkWidget *w, gpointer d)
+{
+    if (!db_is_open()) {
+        mainwin_error("No game open", "Open a game first.");
+        return;
+    }
+    scheme_dialog();
+}
+
+static void
 act_clear_intel(GtkWidget *w, gpointer d)
 {
     GtkWidget *m;
@@ -1238,6 +1249,9 @@ build_menus(void)
              "Home");
     add_item(m, "_Go to Sector...", G_CALLBACK(act_goto), NULL, FALSE,
              "<Control>g");
+    add_sep(m);
+    add_item(m, "Colour _Scheme...", G_CALLBACK(act_scheme), NULL, FALSE,
+             "<Control>k");
     add_sep(m);
     for (int c = 0; c < UC_COUNT; c++) {
         static const char *labels[UC_COUNT] = {

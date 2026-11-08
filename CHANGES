@@ -1,3 +1,23 @@
+GtkACE 0.7.0 (2026-11-07)
+
+  Colour schemes (View -> Colour Scheme, Ctrl+K), as in WinACE:
+  - Normal: choose the colours for your sectors, sea, unseen sectors and
+    other land; other countries keep their player colours.
+  - Conditional: sectors matching a condition such as des=k&civ#0 in one
+    colour, the rest in another.  Empire's syntax: = # < > <= >=, joined
+    with & or |, and the short field names Empire accepts (civ, mil,
+    eff, mob, sh, pet ...).  Mistakes are pointed out as you type.
+  - Graduated: sectors shaded between two colours by any value (eff,
+    food, civ, mob, resources ...), over the range found or one you set,
+    optionally with the values printed on the map.
+  - Distribution: sectors with a threshold for a commodity in one colour,
+    with lines to their distribution sectors.
+  - Conditional and graduated can include other countries' sectors you
+    have seen.
+  - A legend in the corner of the map says what the colours mean.
+  - Settings are kept with each game.
+  - Text on the map is black or white, whichever reads better.
+
 GtkACE 0.6.0 (2026-11-07)
 
   More command dialogs (Commands menu, and the map's right-click menu):

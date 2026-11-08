@@ -124,7 +124,14 @@ typedef struct {
      * relation: enemy, allied, neutral, old (not seen recently) */
     guchar foreign[3][4];
     gboolean intel;      /* own/des come from a sighting, not our data */
+    /* filled in by the colour scheme (scheme.c) */
+    guchar smark;        /* SM_* */
+    int sval;            /* value for the graduated scheme */
 } Sector;
+
+#define SM_HAS   0x01    /* the scheme has data for this sector */
+#define SM_MET   0x02    /* conditional: the condition holds */
+#define SM_ROUTE 0x04    /* distribution: a threshold for the commodity */
 
 enum { REL_ENEMY, REL_ALLIED, REL_NEUTRAL, REL_OLD };
 
@@ -220,6 +227,36 @@ void       units_window_refresh(void);   /* data changed */
 /* --------------------------------------------------------- view options */
 
 extern gboolean show_units[UC_COUNT];   /* View menu toggles */
+
+/* ---------------------------------------------------- colour schemes */
+
+enum { SCHEME_NORMAL, SCHEME_CONDITIONAL, SCHEME_GRADUATED,
+       SCHEME_DISTRIBUTION, SCHEME_COUNT };
+
+typedef struct {
+    int mode;
+    char *condition;            /* conditional: "des=k&civ#0" */
+    gboolean include_enemy;     /* also sectors seen of others */
+    char *field;                /* graduated: "food" */
+    gboolean auto_range;
+    int low, high;
+    gboolean show_value;
+    char dist_item;             /* distribution: commodity letter */
+    /* colours */
+    GdkRGBA land, sea, unknown, other;
+    GdkRGBA met, missed, low_col, high_col, route, noroute;
+} ColourScheme;
+
+extern ColourScheme scheme;
+
+void        scheme_load(void);           /* from the game database */
+void        scheme_save(void);
+void        scheme_defaults(void);
+void        scheme_compute(void);        /* after the world is loaded */
+char       *scheme_legend(void);         /* newly allocated, or NULL */
+GArray     *scheme_dist_lines(void);     /* int x, y, dx, dy, ... */
+gboolean    scheme_check_condition(const char *cond, char **error);
+void        scheme_dialog(void);
 
 /* ------------------------------------------------------- main window */
 

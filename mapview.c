@@ -105,11 +105,7 @@ static struct {
 
 typedef struct { double r, g, b; } RGB;
 
-/* WinACE's default colours (HexGrid SetDefault*Colors) */
-static const RGB col_own = { 0, 1, 135 / 255.0 };
-static const RGB col_sea = { 0, 150 / 255.0, 1 };
-static const RGB col_unknown = { 0, 0, 0 };
-static const RGB col_land = { 188 / 255.0, 188 / 255.0, 188 / 255.0 };
+/* The basic colours come from the colour scheme (scheme.c) */
 static const RGB txt_dark = { 0, 0, 0 };
 static const RGB txt_light = { 1, 1, 1 };
 
@@ -118,9 +114,6 @@ static const guint32 player_bgr[20] = {
     8421631, 65535, 33023, 16512, 32768, 16776960, 16744576, 16744703,
     16711935, 16711808, 128, 32896, 8421440, 12615680, 12615935, 8388736,
     8388672, 8454143, 11395647, 4830697
-};
-static const char player_text_light[20] = {
-    0, 0, 0, 1, 1, 0, 2, 0, 0, 1, 1, 1, 2, 2, 0, 1, 1, 0, 0, 0
 };
 
 static RGB
@@ -131,31 +124,55 @@ bgr(guint32 v)
     return c;
 }
 
+static RGB
+from_rgba(const GdkRGBA *c)
+{
+    RGB r = { c->red, c->green, c->blue };
+    return r;
+}
+
+static RGB
+blend(RGB a, RGB b, double t)
+{
+    RGB r = { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t,
+              a.b + (b.b - a.b) * t };
+    return r;
+}
+
+/* Black or white, whichever reads better on the fill */
+static RGB
+text_for(RGB fill)
+{
+    double lum = 0.299 * fill.r + 0.587 * fill.g + 0.114 * fill.b;
+
+    return lum > 0.5 ? txt_dark : txt_light;
+}
+
 static void
 sector_colours(const Sector *s, RGB *fill, RGB *text)
 {
-    *text = txt_dark;
     if (!s || !s->des) {
-        *fill = col_unknown;
-        *text = txt_light;
+        *fill = from_rgba(&scheme.unknown);
     } else if (s->des == '.' || s->des == '=') {
-        *fill = col_sea;
-        *text = txt_light;
-    } else if (s->own >= 0 && s->own == my_cnum) {
-        *fill = col_own;
-    } else if (s->own > 0) {
-        int i = (s->own - 1) % 20;
+        *fill = from_rgba(&scheme.sea);
+    } else if (scheme.mode == SCHEME_CONDITIONAL && (s->smark & SM_HAS)) {
+        *fill = from_rgba(s->smark & SM_MET ? &scheme.met : &scheme.missed);
+    } else if (scheme.mode == SCHEME_GRADUATED && (s->smark & SM_HAS)) {
+        double t = scheme.high == scheme.low ? 1.0
+            : (double)(s->sval - scheme.low) / (scheme.high - scheme.low);
 
-        *fill = bgr(player_bgr[i]);
-        if (player_text_light[i] == 1)
-            *text = txt_light;
-        else if (player_text_light[i] == 2) {
-            RGB y = { 1, 1, 0 };
-            *text = y;
-        }
+        *fill = blend(from_rgba(&scheme.low_col), from_rgba(&scheme.high_col),
+                      CLAMP(t, 0.0, 1.0));
+    } else if (scheme.mode == SCHEME_DISTRIBUTION && (s->smark & SM_HAS)) {
+        *fill = from_rgba(s->smark & SM_ROUTE ? &scheme.route : &scheme.noroute);
+    } else if (s->own >= 0 && s->own == my_cnum) {
+        *fill = from_rgba(&scheme.land);
+    } else if (s->own > 0) {
+        *fill = bgr(player_bgr[(s->own - 1) % 20]);
     } else {
-        *fill = col_land;
+        *fill = from_rgba(&scheme.other);
     }
+    *text = text_for(*fill);
 }
 
 static double
@@ -241,6 +258,116 @@ draw_path(cairo_t *cr, int W, int H)
     cairo_arc(cr, px, py, MAX(4.0, mv.side / 3), 0, 2 * G_PI);
     cairo_stroke(cr);
     cairo_restore(cr);
+}
+
+/* Distribution scheme: a line from each sector to its distribution
+ * sector, drawn the short way round the world */
+static void
+draw_dist_lines(cairo_t *cr, int W, int H)
+{
+    GArray *a = scheme_dist_lines();
+    double dx = SQRT3_2 * mv.side, dy = 1.5 * mv.side;
+
+    if (!a || !a->len)
+        return;
+    cairo_save(cr);
+    cairo_set_line_width(cr, MAX(1.5, mv.side / 8));
+    cairo_set_source_rgba(cr, 0.35, 0.1, 0.5, 0.8);
+    for (guint i = 0; i + 3 < a->len; i += 4) {
+        int x = g_array_index(a, int, i), y = g_array_index(a, int, i + 1);
+        int tx = g_array_index(a, int, i + 2), ty = g_array_index(a, int, i + 3);
+        double px = W / 2.0 + delta(x, mv.cx, world_x) * dx;
+        double py = H / 2.0 + delta(y, mv.cy, world_y) * dy;
+        double qx = px + delta(tx, x, world_x) * dx;
+        double qy = py + delta(ty, y, world_y) * dy;
+
+        cairo_move_to(cr, px, py);
+        cairo_line_to(cr, qx, qy);
+        cairo_stroke(cr);
+        cairo_arc(cr, qx, qy, MAX(2.0, mv.side / 6), 0, 2 * G_PI);
+        cairo_fill(cr);
+    }
+    cairo_restore(cr);
+}
+
+static void
+swatch(cairo_t *cr, double x, double y, const GdkRGBA *c)
+{
+    cairo_rectangle(cr, x, y, 14, 12);
+    gdk_cairo_set_source_rgba(cr, c);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgb(cr, 0.2, 0.2, 0.2);
+    cairo_set_line_width(cr, 1);
+    cairo_stroke(cr);
+}
+
+/* What the colours mean, in the bottom left corner */
+static void
+draw_legend(cairo_t *cr, int W, int H)
+{
+    char *title = scheme_legend();
+    PangoLayout *lay;
+    const char *a = NULL, *b = NULL;
+    const GdkRGBA *ca = NULL, *cb = NULL;
+    int tw, th, aw = 0, bw = 0, h;
+    double x = 8, y, w;
+
+    if (!title || world_x <= 0) {
+        g_free(title);
+        return;
+    }
+    lay = gtk_widget_create_pango_layout(mv.area, title);
+    pango_layout_get_pixel_size(lay, &tw, &th);
+    switch (scheme.mode) {
+    case SCHEME_CONDITIONAL:
+        a = "true"; ca = &scheme.met; b = "false"; cb = &scheme.missed;
+        break;
+    case SCHEME_GRADUATED:
+        a = "low"; ca = &scheme.low_col; b = "high"; cb = &scheme.high_col;
+        break;
+    case SCHEME_DISTRIBUTION:
+        a = "threshold"; ca = &scheme.route; b = "none"; cb = &scheme.noroute;
+        break;
+    }
+    if (a) {
+        PangoLayout *l2 = gtk_widget_create_pango_layout(mv.area, a);
+
+        pango_layout_get_pixel_size(l2, &aw, NULL);
+        pango_layout_set_text(l2, b, -1);
+        pango_layout_get_pixel_size(l2, &bw, NULL);
+        g_object_unref(l2);
+    }
+    w = MAX(tw, 14 + 4 + aw + 12 + 14 + 4 + bw) + 16;
+    h = th + (a ? th + 6 : 0) + 12;
+    y = H - h - 8;
+    cairo_save(cr);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_set_source_rgba(cr, 1, 1, 1, 0.88);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgb(cr, 0.3, 0.3, 0.3);
+    cairo_set_line_width(cr, 1);
+    cairo_stroke(cr);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_move_to(cr, x + 8, y + 6);
+    pango_cairo_show_layout(cr, lay);
+    if (a) {
+        double ly = y + 6 + th + 4, lx = x + 8;
+
+        swatch(cr, lx, ly + (th - 12) / 2.0, ca);
+        cairo_set_source_rgb(cr, 0, 0, 0);
+        pango_layout_set_text(lay, a, -1);
+        cairo_move_to(cr, lx + 18, ly);
+        pango_cairo_show_layout(cr, lay);
+        lx += 18 + aw + 12;
+        swatch(cr, lx, ly + (th - 12) / 2.0, cb);
+        cairo_set_source_rgb(cr, 0, 0, 0);
+        pango_layout_set_text(lay, b, -1);
+        cairo_move_to(cr, lx + 18, ly);
+        pango_cairo_show_layout(cr, lay);
+    }
+    cairo_restore(cr);
+    g_object_unref(lay);
+    g_free(title);
 }
 
 void
@@ -363,12 +490,22 @@ draw(GtkWidget *w, cairo_t *cr, gpointer data)
                     draw_text(cr, big, t, px, py);
                 }
             }
+            if (scheme.mode == SCHEME_GRADUATED && scheme.show_value && sec
+                && (sec->smark & SM_HAS) && s >= 14) {
+                char v[16];
+
+                snprintf(v, sizeof(v), "%d", sec->sval);
+                cairo_set_source_rgb(cr, text.r, text.g, text.b);
+                draw_text(cr, small, v, px, py - s * 0.55);
+            }
         }
     }
     g_object_unref(big);
     g_object_unref(small);
+    draw_dist_lines(cr, W, H);
     if (mv.path)
         draw_path(cr, W, H);
+    draw_legend(cr, W, H);
     return TRUE;
 }
 

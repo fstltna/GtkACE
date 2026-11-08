@@ -184,6 +184,7 @@ conn_close(const char *why)
     set_state(CONN_DOWN, why);
     intel_command_end();
     tele_command_end();
+    report_command_end();
     flush_queue();
     status_set_busy(0);
     if (why && *why)
@@ -476,6 +477,8 @@ send_next(void)
     if (c->flags & CMD_SHOW) {
         intel_command_start(c->text);
         tele_command_start(c->text);
+        if (c->flags & CMD_USER)
+            report_command_start(c->text);
     }
     if (c->flags & CMD_SHOW)
         out_prompt(c->text);
@@ -493,6 +496,7 @@ command_finished(void)
         if (c->flags & CMD_SHOW) {
             intel_command_end();
             tele_command_end();
+            report_command_end();
         }
         if (c->done)
             c->done(c->data);
@@ -635,6 +639,7 @@ play_line(int id, const char *text)
 
         intel_line(plain);
         tele_line(plain);
+        report_line(plain);
         g_free(plain);
     }
     if (!c || (c->flags & CMD_SHOW))

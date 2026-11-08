@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.7.0):
+Working now (0.8.0):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,
@@ -61,14 +61,18 @@ Working now (0.7.0):
   conditional (e.g. `des=k&civ#0`, in Empire's syntax); graduated by any
   value, optionally showing the values; and distribution, with lines to
   distribution sectors.  A legend on the map explains the colours.
+* Reports window (Ctrl+R): report commands (census, budget, nation,
+  production, ship lists ...) open in tabs; Empire's tables become sortable
+  tables, and double-clicking a row finds it on the map.  Refresh, copy
+  and save.
 * Offline mode: open a game's saved map without connecting
 * Report menus and toolbar (budget, census, nation, news, power, report,
   starvation, wire, relations, maps and more)
 
 Planned for later milestones: more intelligence sources (radar maps,
-recon and satellite pictures, attack and battle reports); the report
-windows and WinACE's tools
-(production, build projection, famine relief, fortify, range table ...).
+recon and satellite pictures, attack and battle reports) and WinACE's
+tools (production, build projection, famine relief, fortify, range
+table ...).
 
 ## Building
 

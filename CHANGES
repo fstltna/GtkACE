@@ -1,3 +1,18 @@
+GtkACE 0.8.0 (2026-11-07)
+
+  Reports window (View -> Reports Window, Ctrl+R), as WinACE's frmReport:
+  - Report commands - budget, census, commodity, nation, news, power,
+    production, resource, starvation, ship/land/plane lists, cargo,
+    stats, maps, list, info and more - open in a Reports window, one tab
+    per report, as well as in the main output.  Typed commands count,
+    including Empire's abbreviations (cen, prod ...).
+  - Empire's tables become sortable tables (numbers, percentages, 3.6K
+    and sectors sort properly).  Double-click a row to find its sector
+    or unit on the map.  "Show as table" switches back to the text.
+  - Refresh runs the report again; Copy and Save... keep the text.
+  - View -> "Show Reports in the Reports Window" turns this off for a
+    game.
+
 GtkACE 0.7.0 (2026-11-07)
 
   Colour schemes (View -> Colour Scheme, Ctrl+K), as in WinACE:

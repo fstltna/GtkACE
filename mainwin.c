@@ -21,6 +21,7 @@ static struct {
     GHashTable *panel_vals;     /* field key -> GtkLabel */
     GList *needs_conn;          /* widgets usable only when connected */
     GtkWidget *connect_item;
+    GtkWidget *reports_check;
     Game *game;
     GPtrArray *history;
     int hist_pos;
@@ -867,6 +868,8 @@ mainwin_set_game(const Game *g, gboolean connect)
     g_free(path);
     db_set_setting("country", g->country);
     scheme_load();
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mw.reports_check),
+                                   reports_enabled());
     world_load();
     units_window_refresh();
     mapview_center(0, 0);
@@ -1114,6 +1117,19 @@ act_scheme(GtkWidget *w, gpointer d)
 }
 
 static void
+act_reports(GtkWidget *w, gpointer d)
+{
+    reports_show_window();
+}
+
+static void
+act_reports_toggled(GtkCheckMenuItem *ck, gpointer d)
+{
+    if (db_is_open())
+        reports_set_enabled(gtk_check_menu_item_get_active(ck));
+}
+
+static void
 act_clear_intel(GtkWidget *w, gpointer d)
 {
     GtkWidget *m;
@@ -1252,6 +1268,14 @@ build_menus(void)
     add_sep(m);
     add_item(m, "Colour _Scheme...", G_CALLBACK(act_scheme), NULL, FALSE,
              "<Control>k");
+    add_item(m, "_Reports Window", G_CALLBACK(act_reports), NULL, FALSE,
+             "<Control>r");
+    mw.reports_check = gtk_check_menu_item_new_with_mnemonic(
+        "Show Reports in the Reports _Window");
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mw.reports_check), TRUE);
+    g_signal_connect(mw.reports_check, "toggled",
+                     G_CALLBACK(act_reports_toggled), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), mw.reports_check);
     add_sep(m);
     for (int c = 0; c < UC_COUNT; c++) {
         static const char *labels[UC_COUNT] = {

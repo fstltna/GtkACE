@@ -2,6 +2,6 @@
 #define GTKACE_VERSION_H
 
 #define GTKACE_NAME    "GtkACE"
-#define GTKACE_VERSION "0.7.0"
+#define GTKACE_VERSION "0.8.0"
 
 #endif

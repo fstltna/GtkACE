@@ -228,6 +228,15 @@ void       units_window_refresh(void);   /* data changed */
 
 extern gboolean show_units[UC_COUNT];   /* View menu toggles */
 
+/* ---------------------------------------------------------- reports */
+
+void        report_command_start(const char *cmd);
+void        report_line(const char *text);
+void        report_command_end(void);
+void        reports_show_window(void);
+gboolean    reports_enabled(void);
+void        reports_set_enabled(gboolean on);
+
 /* ---------------------------------------------------- colour schemes */
 
 enum { SCHEME_NORMAL, SCHEME_CONDITIONAL, SCHEME_GRADUATED,

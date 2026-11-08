@@ -1,3 +1,21 @@
+GtkACE 0.6.0 (2026-11-07)
+
+  More command dialogs (Commands menu, and the map's right-click menu):
+  - Attack: lists your sectors next to the target with their military,
+    and the land units there.  Choose how many to send from each
+    sector and which units go; GtkACE answers the server's questions
+    from your choices (including moving in after a win).
+  - Fire: from a fortress, ships or artillery at a sector or a ship.
+  - Air Mission: fly or drop cargo, paradrop, bomb (pinpoint or
+    strategic) and recon.  Click an airfield to pick its planes; no
+    escorts is fine.
+  - Distribute and Threshold, showing the sector's current settings.
+  - Right-click: Distribute and Threshold on your sectors; Attack and
+    Fire on others; Fly or Bomb on sectors with your planes.
+  Fixes:
+  - Right-click menu items did nothing: the menu was destroyed before
+    the chosen item could run.
+
 GtkACE 0.5.0 (2026-11-07)
 
   Telegram window (Diplomacy -> Telegrams, Ctrl+T, the toolbar's

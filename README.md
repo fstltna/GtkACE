@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.5.0):
+Working now (0.6.0):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,
@@ -52,16 +52,18 @@ Working now (0.5.0):
 * Command dialogs (Commands menu or right-click on the map): Move, with
   the server's best path, mobility cost and mobility left, and the path
   drawn on the map; Navigate and March; Build (ships, land units, planes,
-  nukes, bridges) with each type's costs; Load and Unload.  Click the map
-  to fill in sectors and units.  Each dialog shows the command it sends.
+  nukes, bridges) with each type's costs; Load and Unload; Attack, which
+  answers the server's questions from your choice of military and units;
+  Fire; Air Mission (fly, drop, paradrop, bomb, recon); Distribute and
+  Threshold.  Click the map to fill in sectors and units.  Each dialog
+  shows the command it sends.
 * Offline mode: open a game's saved map without connecting
 * Report menus and toolbar (budget, census, nation, news, power, report,
   starvation, wire, relations, maps and more)
 
 Planned for later milestones: more intelligence sources (radar maps,
 recon and satellite pictures, attack and battle reports); the report
-windows; more command dialogs (attack, fire, fly, bomb, distribute,
-threshold ...); colour schemes; and WinACE's tools
+windows; colour schemes; and WinACE's tools
 (production, build projection, famine relief, fortify, range table ...).
 
 ## Building

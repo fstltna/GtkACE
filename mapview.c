@@ -536,6 +536,11 @@ open_dialog(GtkMenuItem *item, gpointer which)
     case 4: dlg_load(UC_SHIP, u = units_here(UC_SHIP)); break;
     case 5: dlg_nav(UC_LAND, u = units_here(UC_LAND)); break;
     case 6: dlg_load(UC_LAND, u = units_here(UC_LAND)); break;
+    case 7: dlg_distribute(mv.sel_x, mv.sel_y, TRUE); break;
+    case 8: dlg_threshold(mv.sel_x, mv.sel_y, TRUE); break;
+    case 9: dlg_attack(mv.sel_x, mv.sel_y, TRUE); break;
+    case 10: dlg_fire(mv.sel_x, mv.sel_y, TRUE); break;
+    case 11: dlg_air(mv.sel_x, mv.sel_y, TRUE); break;
     }
     g_free(u);
 }
@@ -556,6 +561,19 @@ menu_item(GtkWidget *menu, const char *label, GCallback cb, gpointer data,
     gtk_widget_set_sensitive(it, !needs_conn || conn_state() == CONN_PLAYING);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
     return it;
+}
+
+static gboolean
+destroy_menu_idle(gpointer menu)
+{
+    gtk_widget_destroy(menu);
+    return G_SOURCE_REMOVE;
+}
+
+static void
+destroy_menu_later(GtkWidget *menu, gpointer d)
+{
+    g_idle_add(destroy_menu_idle, menu);
 }
 
 static void
@@ -583,6 +601,22 @@ popup_menu(GdkEvent *ev)
               GINT_TO_POINTER(1), FALSE);
     menu_item(menu, "_Build Here...", G_CALLBACK(open_dialog),
               GINT_TO_POINTER(2), FALSE);
+    {
+        Sector *sec = world_sector(mv.sel_x, mv.sel_y);
+        gboolean ours = sec && sec->own >= 0 && sec->own == my_cnum;
+
+        if (ours) {
+            menu_item(menu, "Dis_tribute...", G_CALLBACK(open_dialog),
+                      GINT_TO_POINTER(7), FALSE);
+            menu_item(menu, "T_hreshold...", G_CALLBACK(open_dialog),
+                      GINT_TO_POINTER(8), FALSE);
+        } else if (sec && sec->des) {
+            menu_item(menu, "_Attack This Sector...", G_CALLBACK(open_dialog),
+                      GINT_TO_POINTER(9), FALSE);
+            menu_item(menu, "_Fire At This Sector...", G_CALLBACK(open_dialog),
+                      GINT_TO_POINTER(10), FALSE);
+        }
+    }
     {
         static const char *unit_cmds[UC_COUNT][2] = {
             { "List S_hips Here", "ship %d,%d" },
@@ -613,13 +647,18 @@ popup_menu(GdkEvent *ev)
                           G_CALLBACK(open_dialog), GINT_TO_POINTER(5), FALSE);
                 menu_item(menu, "Load or Unload Land Units Here...",
                           G_CALLBACK(open_dialog), GINT_TO_POINTER(6), FALSE);
+            } else if (c == UC_PLANE) {
+                menu_item(menu, "Fly or Bomb With Planes Here...",
+                          G_CALLBACK(open_dialog), GINT_TO_POINTER(11), FALSE);
             }
         }
     }
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
     menu_item(menu, "Cen_ter Map Here", G_CALLBACK(center_here), NULL, FALSE);
     gtk_widget_show_all(menu);
-    g_signal_connect(menu, "deactivate", G_CALLBACK(gtk_widget_destroy), NULL);
+    /* GTK deactivates a menu before running the chosen item, so it may
+     * only be destroyed once the main loop is idle again */
+    g_signal_connect(menu, "deactivate", G_CALLBACK(destroy_menu_later), NULL);
     gtk_menu_popup_at_pointer(GTK_MENU(menu), ev);
 }
 

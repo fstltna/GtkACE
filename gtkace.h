@@ -59,6 +59,9 @@ typedef enum {
 
 typedef void (*CmdLineFunc)(int id, const char *text, gpointer data);
 typedef void (*CmdDoneFunc)(gpointer data);
+/* Chooses the reply to a server prompt: a newly allocated string, or
+ * NULL to ask the player as usual */
+typedef char *(*CmdAnswerFunc)(const char *prompt, gpointer data);
 
 void       conn_start(const Game *g);
 void       conn_close(const char *why);
@@ -76,6 +79,9 @@ int        conn_queue_length(void);
 void       conn_command_answers(const char *cmd, guint flags,
                                 const char *const *answers,
                                 CmdDoneFunc done, gpointer data);
+void       conn_command_responder(const char *cmd, guint flags,
+                                  CmdAnswerFunc responder, CmdDoneFunc done,
+                                  gpointer data);
 
 /* ---------------------------------------------------------- database */
 
@@ -199,6 +205,11 @@ void       dlg_move(int x, int y, gboolean have_sector);
 void       dlg_nav(UnitClass c, const char *units);  /* ships or land */
 void       dlg_build(int x, int y, gboolean have_sector);
 void       dlg_load(UnitClass c, const char *units);
+void       dlg_distribute(int x, int y, gboolean have_sector);
+void       dlg_threshold(int x, int y, gboolean have_sector);
+void       dlg_fire(int x, int y, gboolean have_target);
+void       dlg_attack(int x, int y, gboolean have_target);
+void       dlg_air(int x, int y, gboolean have_sector);
 
 /* ------------------------------------------------------ units window */
 

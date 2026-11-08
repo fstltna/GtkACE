@@ -1069,6 +1069,13 @@ act_dlg(GtkWidget *w, gpointer which)
     case 4: dlg_build(x, y, sel); break;
     case 5: dlg_load(UC_SHIP, NULL); break;
     case 6: dlg_load(UC_LAND, NULL); break;
+    case 7: dlg_distribute(x, y, sel); break;
+    case 8: dlg_threshold(x, y, sel); break;
+    case 9: dlg_attack(x, y, sel && world_sector(x, y)
+                       && world_sector(x, y)->own != my_cnum); break;
+    case 10: dlg_fire(x, y, sel && world_sector(x, y)
+                      && world_sector(x, y)->own != my_cnum); break;
+    case 11: dlg_air(x, y, sel); break;
     }
 }
 
@@ -1292,6 +1299,18 @@ build_menus(void)
              GINT_TO_POINTER(5), FALSE, "<Control>l");
     add_item(m, "Load or Unload L_and Units...", G_CALLBACK(act_dlg),
              GINT_TO_POINTER(6), FALSE, NULL);
+    add_sep(m);
+    add_item(m, "_Distribute...", G_CALLBACK(act_dlg), GINT_TO_POINTER(7),
+             FALSE, NULL);
+    add_item(m, "_Threshold...", G_CALLBACK(act_dlg), GINT_TO_POINTER(8),
+             FALSE, NULL);
+    add_sep(m);
+    add_item(m, "Atta_ck...", G_CALLBACK(act_dlg), GINT_TO_POINTER(9),
+             FALSE, NULL);
+    add_item(m, "_Fire...", G_CALLBACK(act_dlg), GINT_TO_POINTER(10),
+             FALSE, NULL);
+    add_item(m, "Air _Mission (fly, bomb, paradrop, recon)...",
+             G_CALLBACK(act_dlg), GINT_TO_POINTER(11), FALSE, NULL);
 
     m = add_menu(bar, "Re_ports");
     add_cmd(m, "_Budget", "budget");

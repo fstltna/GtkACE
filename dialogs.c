@@ -1342,3 +1342,996 @@ dlg_load(UnitClass c, const char *units)
     gtk_window_present(GTK_WINDOW(ld.f.win));
     mapview_set_pick(load_pick, &ld);
 }
+
+/* ======================================================= distribute */
+
+static struct {
+    Frame f;
+    GtkWidget *sects, *dist;
+} dd;
+
+static char *
+dist_command(void)
+{
+    char *s = entry_trimmed(dd.sects), *d = entry_trimmed(dd.dist), *cmd = NULL;
+    int x, y;
+
+    if (*s && !strchr(s, ' ')
+        && (parse_sector(d, &x, &y) || !strcmp(d, ".") || !strcmp(d, "h")))
+        cmd = g_strdup_printf("distribute %s %s", s, d);
+    g_free(s);
+    g_free(d);
+    return cmd;
+}
+
+static void
+dist_update(void)
+{
+    char *s = entry_trimmed(dd.sects), *cmd;
+    int x, y;
+
+    if (parse_sector(s, &x, &y) && our_sector(x, y)) {
+        int dx = sect_value(x, y, "xdist", x), dy = sect_value(x, y, "ydist", y);
+        char *t = dx == x && dy == y
+            ? g_strdup_printf("%d,%d has no distribution sector.", x, y)
+            : g_strdup_printf("%d,%d now distributes through %d,%d.", x, y, dx,
+                              dy);
+
+        set_info(&dd.f, t);
+        g_free(t);
+    } else {
+        set_info(&dd.f, "Sectors can be one sector (x,y), an area such as "
+                 "-2:4,0:3, or * for all.\nDistribution sector \".\" "
+                 "removes it.");
+    }
+    cmd = dist_command();
+    set_preview(&dd.f, cmd);
+    g_free(cmd);
+    g_free(s);
+}
+
+static void
+dist_ok(GtkButton *b, gpointer d)
+{
+    char *cmd = dist_command();
+
+    if (cmd) {
+        send(cmd);
+        g_free(cmd);
+        gtk_widget_destroy(dd.f.win);
+    }
+}
+
+static void
+dist_pick(int x, int y, gpointer d)
+{
+    char s[32];
+
+    snprintf(s, sizeof(s), "%d,%d", x, y);
+    if (dd.f.pick_target == dd.sects || !*entry_text(dd.sects)) {
+        gtk_entry_set_text(GTK_ENTRY(dd.sects), s);
+        dd.f.pick_target = dd.dist;
+        gtk_widget_grab_focus(dd.dist);
+    } else {
+        gtk_entry_set_text(GTK_ENTRY(dd.dist), s);
+    }
+}
+
+static void
+dist_destroyed(GtkWidget *w, gpointer d)
+{
+    mapview_clear_pick(&dd);
+    memset(&dd, 0, sizeof(dd));
+}
+
+void
+dlg_distribute(int x, int y, gboolean have_sector)
+{
+    char s[32];
+
+    if (!dd.f.win) {
+        frame_new(&dd.f, "Distribute", "_Distribute");
+        dd.sects = sector_entry(&dd.f, "_Sectors:", "The sectors to set: x,y, "
+                                "an area like -2:4,0:3, or *");
+        dd.dist = sector_entry(&dd.f, "_Distribution sector:",
+                               "The warehouse (or other sector) they "
+                               "distribute through; \".\" for none");
+        gtk_entry_set_placeholder_text(GTK_ENTRY(dd.dist),
+                                       "x,y, \".\" for none, or click");
+        g_signal_connect_swapped(dd.sects, "changed", G_CALLBACK(dist_update),
+                                 NULL);
+        g_signal_connect_swapped(dd.dist, "changed", G_CALLBACK(dist_update),
+                                 NULL);
+        g_signal_connect(dd.sects, "focus-in-event", G_CALLBACK(entry_focus),
+                         &dd.f);
+        g_signal_connect(dd.dist, "focus-in-event", G_CALLBACK(entry_focus),
+                         &dd.f);
+        g_signal_connect(dd.f.ok, "clicked", G_CALLBACK(dist_ok), NULL);
+        g_signal_connect(dd.f.win, "destroy", G_CALLBACK(dist_destroyed), NULL);
+        frame_show(&dd.f, dist_pick, &dd);
+    }
+    if (have_sector) {
+        snprintf(s, sizeof(s), "%d,%d", x, y);
+        gtk_entry_set_text(GTK_ENTRY(dd.sects), s);
+        dd.f.pick_target = dd.dist;
+        gtk_widget_grab_focus(dd.dist);
+    }
+    dist_update();
+    gtk_window_present(GTK_WINDOW(dd.f.win));
+    mapview_set_pick(dist_pick, &dd);
+}
+
+/* ======================================================== threshold */
+
+static struct {
+    Frame f;
+    GtkWidget *item, *sects, *value;
+} td;
+
+static char *
+thresh_command(void)
+{
+    char *s = entry_trimmed(td.sects), *cmd = NULL;
+    const Item *it = combo_item(td.item);
+    const char *v = gtk_entry_get_text(GTK_ENTRY(td.value));
+
+    if (it && *s && !strchr(s, ' ') && *v)
+        cmd = g_strdup_printf("threshold %c %s %d", it->letter, s,
+                              spin_value(td.value));
+    g_free(s);
+    return cmd;
+}
+
+static void
+thresh_update(void)
+{
+    char *s = entry_trimmed(td.sects), *cmd;
+    const Item *it = combo_item(td.item);
+    int x, y;
+
+    if (it && parse_sector(s, &x, &y) && our_sector(x, y)) {
+        char col[16];
+        int cur, have;
+        char *t;
+
+        snprintf(col, sizeof(col), "%c_dist", it->letter);
+        cur = sect_value(x, y, col, 0);
+        have = sect_value(x, y, it->col, 0);
+        t = cur ? g_strdup_printf("%d,%d has %d %s; its threshold is %d.", x,
+                                  y, have, it->label, cur)
+            : g_strdup_printf("%d,%d has %d %s and no threshold.", x, y, have,
+                              it->label);
+        set_info(&td.f, t);
+        g_free(t);
+    } else {
+        set_info(&td.f, "Sectors can be one sector, an area such as "
+                 "-2:4,0:3, or *.  A threshold of 0 removes it.");
+    }
+    cmd = thresh_command();
+    set_preview(&td.f, cmd);
+    g_free(cmd);
+    g_free(s);
+}
+
+static void
+thresh_ok(GtkButton *b, gpointer d)
+{
+    char *cmd = thresh_command();
+
+    if (cmd) {
+        send(cmd);
+        g_free(cmd);
+        gtk_widget_destroy(td.f.win);
+    }
+}
+
+static void
+thresh_pick(int x, int y, gpointer d)
+{
+    char s[32];
+
+    snprintf(s, sizeof(s), "%d,%d", x, y);
+    gtk_entry_set_text(GTK_ENTRY(td.sects), s);
+}
+
+static void
+thresh_destroyed(GtkWidget *w, gpointer d)
+{
+    mapview_clear_pick(&td);
+    memset(&td, 0, sizeof(td));
+}
+
+void
+dlg_threshold(int x, int y, gboolean have_sector)
+{
+    char s[32];
+
+    if (!td.f.win) {
+        frame_new(&td.f, "Threshold", "_Set Threshold");
+        td.item = add_row(&td.f, "_Commodity:", item_combo());
+        gtk_combo_box_set_active_id(GTK_COMBO_BOX(td.item), "f");
+        td.sects = sector_entry(&td.f, "_Sectors:", "The sectors to set: x,y, "
+                                "an area like -2:4,0:3, or *");
+        td.value = add_row(&td.f, "_Threshold:",
+                           gtk_spin_button_new_with_range(0, 9999, 1));
+        gtk_entry_set_activates_default(GTK_ENTRY(td.value), TRUE);
+        g_signal_connect_swapped(td.item, "changed", G_CALLBACK(thresh_update),
+                                 NULL);
+        g_signal_connect_swapped(td.sects, "changed", G_CALLBACK(thresh_update),
+                                 NULL);
+        g_signal_connect_swapped(td.value, "changed", G_CALLBACK(thresh_update),
+                                 NULL);
+        g_signal_connect(td.f.ok, "clicked", G_CALLBACK(thresh_ok), NULL);
+        g_signal_connect(td.f.win, "destroy", G_CALLBACK(thresh_destroyed),
+                         NULL);
+        frame_show(&td.f, thresh_pick, &td);
+    }
+    if (have_sector) {
+        snprintf(s, sizeof(s), "%d,%d", x, y);
+        gtk_entry_set_text(GTK_ENTRY(td.sects), s);
+    }
+    thresh_update();
+    gtk_window_present(GTK_WINDOW(td.f.win));
+    mapview_set_pick(thresh_pick, &td);
+}
+
+/* ============================================================= fire */
+
+enum { FIRE_SECT, FIRE_SHIP, FIRE_LAND };
+
+static struct {
+    Frame f;
+    GtkWidget *kind[3], *from, *target;
+} fd;
+
+static int
+fire_kind(void)
+{
+    for (int i = 0; i < 3; i++)
+        if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(fd.kind[i])))
+            return i;
+    return FIRE_SECT;
+}
+
+static char *
+fire_command(void)
+{
+    static const char *words[] = { "sect", "ship", "land" };
+    char *f = entry_trimmed(fd.from), *t = entry_trimmed(fd.target), *cmd = NULL;
+    int k = fire_kind(), x, y;
+    char *end;
+
+    if (*f && !strchr(f, ' ') && *t && !strchr(t, ' ')
+        && (k != FIRE_SECT || parse_sector(f, &x, &y))
+        && (parse_sector(t, &x, &y) || (strtol(t, &end, 10), !*end)))
+        cmd = g_strdup_printf("fire %s %s %s", words[k], f, t);
+    g_free(f);
+    g_free(t);
+    return cmd;
+}
+
+static void
+fire_update(void)
+{
+    char *f = entry_trimmed(fd.from), *cmd;
+    int k = fire_kind(), x, y;
+    GString *info = g_string_new(NULL);
+
+    if (k == FIRE_SECT && parse_sector(f, &x, &y)) {
+        if (our_sector(x, y)) {
+            Sector *s = world_sector(x, y);
+
+            g_string_printf(info, "%s %d,%d: %d guns, %d shells, %d mil",
+                            s && s->des ? world_des_name(s->des) : "sector",
+                            x, y, sect_value(x, y, "gun", 0),
+                            sect_value(x, y, "shell", 0),
+                            sect_value(x, y, "milit", 0));
+            if (s && s->des != 'f')
+                g_string_append(info, "\nOnly fortresses can fire.");
+        }
+    } else if (k != FIRE_SECT) {
+        Unit *u = find_unit(k == FIRE_SHIP ? UC_SHIP : UC_LAND, f);
+
+        if (u) {
+            char *d = world_unit_describe(u);
+
+            g_string_printf(info, "%s at %d,%d", d, u->x, u->y);
+            g_free(d);
+        }
+    }
+    g_string_append_printf(info, "%sTarget: a sector (x,y), or a ship's "
+                           "number.", info->len ? "\n" : "");
+    set_info(&fd.f, info->str);
+    g_string_free(info, TRUE);
+    cmd = fire_command();
+    set_preview(&fd.f, cmd);
+    g_free(cmd);
+    g_free(f);
+}
+
+static void
+fire_ok(GtkButton *b, gpointer d)
+{
+    char *cmd = fire_command();
+
+    if (cmd) {
+        send(cmd);
+        g_free(cmd);
+        gtk_widget_destroy(fd.f.win);
+    }
+}
+
+/* A click picks the guns (a fortress, or our ships or artillery there)
+ * if none are chosen yet, otherwise the target */
+static void
+fire_pick(int x, int y, gpointer d)
+{
+    int k = fire_kind();
+    char s[32];
+
+    snprintf(s, sizeof(s), "%d,%d", x, y);
+    if (!*entry_text(fd.from) || fd.f.pick_target == fd.from) {
+        char *here = k == FIRE_SECT ? NULL
+            : units_at(k == FIRE_SHIP ? UC_SHIP : UC_LAND, x, y);
+
+        if (k == FIRE_SECT ? our_sector(x, y) : *here) {
+            gtk_entry_set_text(GTK_ENTRY(fd.from), k == FIRE_SECT ? s : here);
+            g_free(here);
+            fd.f.pick_target = fd.target;
+            gtk_widget_grab_focus(fd.target);
+            return;
+        }
+        g_free(here);
+    }
+    gtk_entry_set_text(GTK_ENTRY(fd.target), s);
+}
+
+static void
+fire_destroyed(GtkWidget *w, gpointer d)
+{
+    mapview_clear_pick(&fd);
+    memset(&fd, 0, sizeof(fd));
+}
+
+void
+dlg_fire(int x, int y, gboolean have_target)
+{
+    static const char *labels[] = { "_fortress", "_ships", "_artillery" };
+    char s[32];
+
+    if (!fd.f.win) {
+        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        GSList *group = NULL;
+
+        frame_new(&fd.f, "Fire", "_Fire");
+        for (int i = 0; i < 3; i++) {
+            fd.kind[i] = gtk_radio_button_new_with_mnemonic(group, labels[i]);
+            group = gtk_radio_button_get_group(GTK_RADIO_BUTTON(fd.kind[i]));
+            gtk_container_add(GTK_CONTAINER(box), fd.kind[i]);
+            g_signal_connect_swapped(fd.kind[i], "toggled",
+                                     G_CALLBACK(fire_update), NULL);
+        }
+        add_row(&fd.f, "Fire with:", box);
+        fd.from = add_row(&fd.f, "F_rom:", gtk_entry_new());
+        gtk_entry_set_placeholder_text(GTK_ENTRY(fd.from),
+                                       "sector, or unit numbers like 2/3");
+        gtk_entry_set_activates_default(GTK_ENTRY(fd.from), TRUE);
+        fd.target = sector_entry(&fd.f, "_Target:", "The sector to shell, or "
+                                 "the number of a ship to fire at");
+        g_signal_connect_swapped(fd.from, "changed", G_CALLBACK(fire_update),
+                                 NULL);
+        g_signal_connect_swapped(fd.target, "changed", G_CALLBACK(fire_update),
+                                 NULL);
+        g_signal_connect(fd.from, "focus-in-event", G_CALLBACK(entry_focus),
+                         &fd.f);
+        g_signal_connect(fd.target, "focus-in-event", G_CALLBACK(entry_focus),
+                         &fd.f);
+        g_signal_connect(fd.f.ok, "clicked", G_CALLBACK(fire_ok), NULL);
+        g_signal_connect(fd.f.win, "destroy", G_CALLBACK(fire_destroyed), NULL);
+        frame_show(&fd.f, fire_pick, &fd);
+    }
+    if (have_target) {
+        snprintf(s, sizeof(s), "%d,%d", x, y);
+        gtk_entry_set_text(GTK_ENTRY(fd.target), s);
+        fd.f.pick_target = fd.from;
+        gtk_widget_grab_focus(fd.from);
+    }
+    fire_update();
+    gtk_window_present(GTK_WINDOW(fd.f.win));
+    mapview_set_pick(fire_pick, &fd);
+}
+
+/* =========================================================== attack */
+
+/* The plan the dialog hands to the server's prompts */
+typedef struct {
+    GHashTable *mil;            /* "x,y" -> mil to attack with */
+    GHashTable *units;          /* uid -> 1 for land units to use */
+    gboolean move_in;
+} AttackPlan;
+
+static void
+plan_free(gpointer d)
+{
+    AttackPlan *p = d;
+
+    g_hash_table_destroy(p->mil);
+    g_hash_table_destroy(p->units);
+    g_free(p);
+}
+
+/* "(max N)" or "(N max)" in a prompt */
+static int
+prompt_max(const char *prompt)
+{
+    const char *p = strstr(prompt, "(max ");
+
+    if (p)
+        return atoi(p + 5);
+    p = strstr(prompt, " max)");
+    if (p) {
+        while (p > prompt && p[-1] != '(')
+            p--;
+        return atoi(p);
+    }
+    return 0;
+}
+
+/* Answers the attack's questions from the plan; anything else goes to
+ * the player */
+static char *
+attack_responder(const char *prompt, gpointer data)
+{
+    AttackPlan *p = data;
+    const char *q;
+
+    if (g_str_has_prefix(prompt, "Number of mil from ")) {
+        /* "Number of mil from harbor at -1,1 (max 900) : " */
+        const char *at = strstr(prompt, " at ");
+        int max = prompt_max(prompt), want = 0;
+
+        if (at) {
+            char *sect = g_strndup(at + 4, strcspn(at + 4, " "));
+
+            want = GPOINTER_TO_INT(g_hash_table_lookup(p->mil, sect));
+            g_free(sect);
+        }
+        return g_strdup_printf("%d", MIN(want, max));
+    }
+    if (strstr(prompt, "[ynYNq?]") && (q = strstr(prompt, " #"))) {
+        int uid = atoi(q + 2);
+
+        if (g_str_has_prefix(prompt, "Move in with "))
+            return g_strdup(p->move_in ? "y" : "n");
+        return g_strdup(g_hash_table_contains(p->units, GINT_TO_POINTER(uid))
+                        ? "y" : "n");
+    }
+    if (g_str_has_prefix(prompt, "How many mil to move in from "))
+        return g_strdup_printf("%d", p->move_in ? prompt_max(prompt) : 0);
+    return NULL;
+}
+
+static struct {
+    Frame f;
+    GtkWidget *target, *support[4], *move_in;
+    GtkWidget *sect_box, *unit_box;     /* rebuilt for each target */
+    GPtrArray *spins;                   /* GtkSpinButton per sector */
+    GPtrArray *checks;                  /* GtkCheckButton per land unit */
+    int tx, ty;
+    gboolean have_target;
+} ad;
+
+static const int hex_dirs[6][2] = {
+    { -1, -1 }, { 1, -1 }, { -2, 0 }, { 2, 0 }, { -1, 1 }, { 1, 1 }
+};
+
+static void attack_update(void);
+
+static void
+clear_box(GtkWidget *box)
+{
+    GList *kids = gtk_container_get_children(GTK_CONTAINER(box));
+
+    for (GList *l = kids; l; l = l->next)
+        gtk_widget_destroy(l->data);
+    g_list_free(kids);
+}
+
+/* Our sectors and land units next to the target, one row each */
+static void
+attack_fill(void)
+{
+    int x, y, row = 0, urow = 0;
+
+    clear_box(ad.sect_box);
+    clear_box(ad.unit_box);
+    g_ptr_array_set_size(ad.spins, 0);
+    g_ptr_array_set_size(ad.checks, 0);
+    ad.have_target = parse_sector(entry_text(ad.target), &x, &y);
+    if (ad.have_target) {
+        ad.tx = world_wrap_x(x);
+        ad.ty = world_wrap_y(y);
+        for (int d = 0; d < 6; d++) {
+            int nx = world_wrap_x(ad.tx + hex_dirs[d][0]);
+            int ny = world_wrap_y(ad.ty + hex_dirs[d][1]);
+            int mil;
+            char *t;
+            Sector *s;
+            GtkWidget *l, *spin;
+            GPtrArray *lands;
+
+            if (!our_sector(nx, ny))
+                continue;
+            mil = sect_value(nx, ny, "milit", 0);
+            s = world_sector(nx, ny);
+            t = g_strdup_printf("%d,%d %s (%d mil)", nx, ny,
+                                s && s->des ? world_des_name(s->des) : "", mil);
+            l = gtk_label_new(t);
+            g_free(t);
+            gtk_label_set_xalign(GTK_LABEL(l), 0);
+            spin = gtk_spin_button_new_with_range(0, MAX(mil, 0), 1);
+            gtk_entry_set_activates_default(GTK_ENTRY(spin), TRUE);
+            g_object_set_data_full(G_OBJECT(spin), "sect",
+                                   g_strdup_printf("%d,%d", nx, ny), g_free);
+            g_signal_connect_swapped(spin, "changed", G_CALLBACK(attack_update),
+                                     NULL);
+            gtk_grid_attach(GTK_GRID(ad.sect_box), l, 0, row, 1, 1);
+            gtk_grid_attach(GTK_GRID(ad.sect_box), spin, 1, row++, 1, 1);
+            g_ptr_array_add(ad.spins, spin);
+
+            lands = world_units(UC_LAND);
+            for (guint i = 0; i < lands->len; i++) {
+                Unit *u = g_ptr_array_index(lands, i);
+                char *desc;
+                GtkWidget *ck;
+
+                if (u->x != nx || u->y != ny || u->carrier >= 0)
+                    continue;
+                desc = world_unit_describe(u);
+                t = g_strdup_printf("%s at %d,%d", desc, nx, ny);
+                ck = gtk_check_button_new_with_label(t);
+                g_free(t);
+                g_free(desc);
+                g_object_set_data(G_OBJECT(ck), "uid",
+                                  GINT_TO_POINTER(u->uid));
+                gtk_grid_attach(GTK_GRID(ad.unit_box), ck, 0, urow++, 1, 1);
+                g_ptr_array_add(ad.checks, ck);
+            }
+        }
+    }
+    if (!row && ad.have_target)
+        gtk_grid_attach(GTK_GRID(ad.sect_box),
+                        gtk_label_new("None of your sectors are next to it."),
+                        0, 0, 2, 1);
+    if (!urow)
+        gtk_grid_attach(GTK_GRID(ad.unit_box),
+                        gtk_label_new("No land units next to it."), 0, 0, 1, 1);
+    gtk_widget_show_all(ad.sect_box);
+    gtk_widget_show_all(ad.unit_box);
+}
+
+static char *
+attack_command(void)
+{
+    int on[4];
+
+    if (!ad.have_target)
+        return NULL;
+    for (int i = 0; i < 4; i++)
+        on[i] = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ad.support[i]));
+    return g_strdup_printf("attack %d,%d %c %c %c %c", ad.tx, ad.ty,
+                           on[0] ? 'y' : 'n', on[1] ? 'y' : 'n',
+                           on[2] ? 'y' : 'n', on[3] ? 'y' : 'n');
+}
+
+static int
+attack_total(void)
+{
+    int total = 0;
+
+    for (guint i = 0; i < ad.spins->len; i++)
+        total += spin_value(g_ptr_array_index(ad.spins, i));
+    return total;
+}
+
+static void
+attack_update(void)
+{
+    GString *info = g_string_new(NULL);
+    char *cmd;
+
+    if (ad.have_target) {
+        Sector *s = world_sector(ad.tx, ad.ty);
+
+        g_string_printf(info, "Target %d,%d: %s", ad.tx, ad.ty,
+                        s && s->des ? world_des_name(s->des) : "not seen");
+        if (s && s->own > 0 && s->own != my_cnum)
+            g_string_append_printf(info, ", owned by %s",
+                                   world_country_name(s->own));
+        if (s && s->own == my_cnum)
+            g_string_append(info, "\nThat is your own sector.");
+        else
+            g_string_append_printf(info, "\nAttacking with %d mil and the "
+                                   "ticked units.", attack_total());
+    }
+    set_info(&ad.f, info->str);
+    g_string_free(info, TRUE);
+    cmd = attack_command();
+    set_preview(&ad.f, cmd);
+    g_free(cmd);
+}
+
+static void
+attack_target_changed(void)
+{
+    attack_fill();
+    attack_update();
+}
+
+/* Send everything each neighbouring sector has */
+static void
+attack_all(GtkButton *b, gpointer d)
+{
+    for (guint i = 0; i < ad.spins->len; i++) {
+        GtkSpinButton *sp = g_ptr_array_index(ad.spins, i);
+        double lo, hi;
+
+        gtk_spin_button_get_range(sp, &lo, &hi);
+        gtk_spin_button_set_value(sp, hi);
+    }
+    attack_update();
+}
+
+static void
+attack_ok(GtkButton *b, gpointer d)
+{
+    char *cmd = attack_command();
+    AttackPlan *p;
+
+    if (!cmd)
+        return;
+    p = g_new0(AttackPlan, 1);
+    p->mil = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    p->units = g_hash_table_new(NULL, NULL);
+    p->move_in = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ad.move_in));
+    for (guint i = 0; i < ad.spins->len; i++) {
+        GtkWidget *sp = g_ptr_array_index(ad.spins, i);
+
+        g_hash_table_insert(p->mil,
+                            g_strdup(g_object_get_data(G_OBJECT(sp), "sect")),
+                            GINT_TO_POINTER(spin_value(sp)));
+    }
+    for (guint i = 0; i < ad.checks->len; i++) {
+        GtkWidget *ck = g_ptr_array_index(ad.checks, i);
+
+        if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ck)))
+            g_hash_table_add(p->units, g_object_get_data(G_OBJECT(ck), "uid"));
+    }
+    conn_command_responder(cmd, CMD_SHOW | CMD_USER, attack_responder,
+                           plan_free, p);
+    g_free(cmd);
+    gtk_widget_destroy(ad.f.win);
+}
+
+static void
+attack_pick(int x, int y, gpointer d)
+{
+    char s[32];
+
+    snprintf(s, sizeof(s), "%d,%d", x, y);
+    gtk_entry_set_text(GTK_ENTRY(ad.target), s);
+}
+
+static void
+attack_destroyed(GtkWidget *w, gpointer d)
+{
+    mapview_clear_pick(&ad);
+    g_ptr_array_unref(ad.spins);
+    g_ptr_array_unref(ad.checks);
+    memset(&ad, 0, sizeof(ad));
+}
+
+static GtkWidget *
+section(Frame *f, const char *title, GtkWidget *child)
+{
+    GtkWidget *fr = gtk_frame_new(title);
+
+    gtk_container_set_border_width(GTK_CONTAINER(child), 6);
+    gtk_container_add(GTK_CONTAINER(fr), child);
+    gtk_grid_attach(GTK_GRID(f->grid), fr, 0, f->row++, 2, 1);
+    return fr;
+}
+
+void
+dlg_attack(int x, int y, gboolean have_target)
+{
+    static const char *support[] = {
+        "_forts", "_ships", "_land units", "_planes"
+    };
+    char s[32];
+
+    if (!ad.f.win) {
+        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        GtkWidget *all;
+
+        frame_new(&ad.f, "Attack", "_Attack");
+        ad.spins = g_ptr_array_new();
+        ad.checks = g_ptr_array_new();
+        ad.target = sector_entry(&ad.f, "_Target:", "The sector to attack");
+        for (int i = 0; i < 4; i++) {
+            ad.support[i] = gtk_check_button_new_with_mnemonic(support[i]);
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ad.support[i]), TRUE);
+            gtk_container_add(GTK_CONTAINER(box), ad.support[i]);
+        }
+        add_row(&ad.f, "Support from:", box);
+        ad.sect_box = gtk_grid_new();
+        gtk_grid_set_row_spacing(GTK_GRID(ad.sect_box), 2);
+        gtk_grid_set_column_spacing(GTK_GRID(ad.sect_box), 12);
+        section(&ad.f, "Military to attack with, from each sector",
+                ad.sect_box);
+        all = gtk_button_new_with_mnemonic("Send all _mil");
+        g_signal_connect(all, "clicked", G_CALLBACK(attack_all), NULL);
+        gtk_widget_set_halign(all, GTK_ALIGN_START);
+        gtk_grid_attach(GTK_GRID(ad.f.grid), all, 0, ad.f.row++, 2, 1);
+        ad.unit_box = gtk_grid_new();
+        section(&ad.f, "Land units to attack with", ad.unit_box);
+        ad.move_in = gtk_check_button_new_with_mnemonic(
+            "If the attack succeeds, _move in");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ad.move_in), TRUE);
+        gtk_grid_attach(GTK_GRID(ad.f.grid), ad.move_in, 0, ad.f.row++, 2, 1);
+
+        g_signal_connect_swapped(ad.target, "changed",
+                                 G_CALLBACK(attack_target_changed), NULL);
+        for (int i = 0; i < 4; i++)
+            g_signal_connect_swapped(ad.support[i], "toggled",
+                                     G_CALLBACK(attack_update), NULL);
+        g_signal_connect(ad.f.ok, "clicked", G_CALLBACK(attack_ok), NULL);
+        g_signal_connect(ad.f.win, "destroy", G_CALLBACK(attack_destroyed),
+                         NULL);
+        frame_show(&ad.f, attack_pick, &ad);
+    }
+    if (have_target) {
+        snprintf(s, sizeof(s), "%d,%d", x, y);
+        gtk_entry_set_text(GTK_ENTRY(ad.target), s);
+    }
+    attack_target_changed();
+    gtk_window_present(GTK_WINDOW(ad.f.win));
+    mapview_set_pick(attack_pick, &ad);
+}
+
+/* ====================================================== air missions */
+
+enum { AIR_FLY, AIR_DROP, AIR_PARA, AIR_BOMB, AIR_RECON, AIR_KINDS };
+
+static struct {
+    Frame f;
+    GtkWidget *kind[AIR_KINDS], *planes, *escorts, *from, *dest;
+    GtkWidget *item, *item_label, *bomb, *bomb_label;
+} md2;
+
+static int
+air_kind(void)
+{
+    for (int i = 0; i < AIR_KINDS; i++)
+        if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(md2.kind[i])))
+            return i;
+    return AIR_FLY;
+}
+
+static char *
+air_command(void)
+{
+    static const char *verbs[] = { "fly", "dropoff", "paradrop", "bomb",
+                                   "recon" };
+    int k = air_kind(), x, y;
+    char *p = entry_trimmed(md2.planes), *e = entry_trimmed(md2.escorts);
+    char *f = entry_trimmed(md2.from), *d = entry_trimmed(md2.dest), *dest;
+    char *cmd = NULL, *esc;
+
+    if (!*p || strchr(p, ' ') || strchr(e, ' ') || !parse_sector(f, &x, &y)) {
+        g_free(p);
+        g_free(e);
+        g_free(f);
+        g_free(d);
+        return NULL;
+    }
+    if (parse_sector(d, &x, &y))
+        dest = g_strdup(d);
+    else if (is_route(d))
+        dest = route_with_stop(d);
+    else
+        dest = NULL;
+    /* no escorts is an empty argument */
+    esc = *e ? g_strdup(e) : g_strdup("\"\"");
+    if (dest) {
+        if (k == AIR_FLY || k == AIR_DROP) {
+            const Item *it = combo_item(md2.item);
+
+            if (it)
+                cmd = g_strdup_printf("%s %s %s %s %s %c", verbs[k], p, esc, f,
+                                      dest, it->letter);
+        } else if (k == AIR_BOMB) {
+            const char *m = gtk_combo_box_get_active_id(GTK_COMBO_BOX(md2.bomb));
+
+            if (m)
+                cmd = g_strdup_printf("bomb %s %s %s %s %s", p, esc, m, f, dest);
+        } else {
+            cmd = g_strdup_printf("%s %s %s %s %s", verbs[k], p, esc, f, dest);
+        }
+    }
+    g_free(esc);
+    g_free(dest);
+    g_free(p);
+    g_free(e);
+    g_free(f);
+    g_free(d);
+    return cmd;
+}
+
+static void
+air_update(void)
+{
+    int k = air_kind();
+    char *p = entry_trimmed(md2.planes), *cmd;
+    Unit *u = find_unit(UC_PLANE, p);
+    GString *info = g_string_new(NULL);
+
+    gtk_widget_set_visible(md2.item, k == AIR_FLY || k == AIR_DROP);
+    gtk_widget_set_visible(md2.item_label, k == AIR_FLY || k == AIR_DROP);
+    gtk_widget_set_visible(md2.bomb, k == AIR_BOMB);
+    gtk_widget_set_visible(md2.bomb_label, k == AIR_BOMB);
+    if (u) {
+        char *d = world_unit_describe(u);
+
+        g_string_printf(info, "%s at %d,%d, mobility %d", d, u->x, u->y,
+                        u->mob);
+        g_free(d);
+        /* planes take off from where they are */
+        if (!*entry_text(md2.from)) {
+            char s[32];
+
+            snprintf(s, sizeof(s), "%d,%d", u->x, u->y);
+            gtk_entry_set_text(GTK_ENTRY(md2.from), s);
+        }
+    }
+    if (k == AIR_BOMB)
+        g_string_append_printf(info, "%sThe server then asks which targets "
+                               "to bomb.", info->len ? "\n" : "");
+    set_info(&md2.f, info->str);
+    g_string_free(info, TRUE);
+    cmd = air_command();
+    set_preview(&md2.f, cmd);
+    g_free(cmd);
+    g_free(p);
+}
+
+static void
+air_ok(GtkButton *b, gpointer d)
+{
+    char *cmd = air_command();
+
+    if (cmd) {
+        send(cmd);
+        g_free(cmd);
+        gtk_widget_destroy(md2.f.win);
+    }
+}
+
+/* The first click picks the planes on an airfield (and where they take
+ * off), the next the destination */
+static void
+air_pick(int x, int y, gpointer d)
+{
+    char s[32];
+
+    snprintf(s, sizeof(s), "%d,%d", x, y);
+    if (!*entry_text(md2.planes) || md2.f.pick_target == md2.planes) {
+        char *here = units_at(UC_PLANE, x, y);
+
+        if (*here) {
+            gtk_entry_set_text(GTK_ENTRY(md2.from), s);
+            gtk_entry_set_text(GTK_ENTRY(md2.planes), here);
+            g_free(here);
+            md2.f.pick_target = md2.dest;
+            gtk_widget_grab_focus(md2.dest);
+            return;
+        }
+        g_free(here);
+    }
+    if (md2.f.pick_target == md2.from)
+        gtk_entry_set_text(GTK_ENTRY(md2.from), s);
+    else
+        gtk_entry_set_text(GTK_ENTRY(md2.dest), s);
+}
+
+static void
+air_destroyed(GtkWidget *w, gpointer d)
+{
+    mapview_clear_pick(&md2);
+    memset(&md2, 0, sizeof(md2));
+}
+
+void
+dlg_air(int x, int y, gboolean have_sector)
+{
+    static const char *labels[] = {
+        "f_ly cargo", "_drop cargo", "_paradrop", "_bomb", "_recon"
+    };
+    static const char *bombs[][2] = {
+        { "p", "pinpoint (ships, units, planes, commodities)" },
+        { "s", "strategic (sector efficiency)" },
+    };
+
+    if (!md2.f.win) {
+        GtkWidget *box = gtk_grid_new();
+        GSList *group = NULL;
+
+        frame_new(&md2.f, "Air Mission", "_Go");
+        gtk_grid_set_column_spacing(GTK_GRID(box), 8);
+        for (int i = 0; i < AIR_KINDS; i++) {
+            md2.kind[i] = gtk_radio_button_new_with_mnemonic(group, labels[i]);
+            group = gtk_radio_button_get_group(GTK_RADIO_BUTTON(md2.kind[i]));
+            gtk_grid_attach(GTK_GRID(box), md2.kind[i], i % 3, i / 3, 1, 1);
+            g_signal_connect_swapped(md2.kind[i], "toggled",
+                                     G_CALLBACK(air_update), NULL);
+        }
+        add_row(&md2.f, "Mission:", box);
+        md2.planes = add_row(&md2.f, "P_lanes:", gtk_entry_new());
+        gtk_entry_set_placeholder_text(GTK_ENTRY(md2.planes),
+                                       "e.g. 2, 0/1, a wing, or click");
+        gtk_entry_set_activates_default(GTK_ENTRY(md2.planes), TRUE);
+        md2.escorts = add_row(&md2.f, "_Escorts:", gtk_entry_new());
+        gtk_entry_set_placeholder_text(GTK_ENTRY(md2.escorts),
+                                       "fighters to go along (optional)");
+        gtk_entry_set_activates_default(GTK_ENTRY(md2.escorts), TRUE);
+        md2.from = sector_entry(&md2.f, "_Take off from:",
+                                "The airfield (or carrier sector) the planes "
+                                "start from");
+        md2.dest = sector_entry(&md2.f, "_Destination:", "The target or "
+                                "destination sector, or a route (yugjbn)");
+        gtk_entry_set_placeholder_text(GTK_ENTRY(md2.dest),
+                                       "x,y, a route like jjn, or click");
+        md2.item = item_combo();
+        md2.item_label = gtk_label_new_with_mnemonic("_Cargo:");
+        gtk_label_set_xalign(GTK_LABEL(md2.item_label), 1.0);
+        gtk_label_set_mnemonic_widget(GTK_LABEL(md2.item_label), md2.item);
+        gtk_grid_attach(GTK_GRID(md2.f.grid), md2.item_label, 0, md2.f.row, 1, 1);
+        gtk_grid_attach(GTK_GRID(md2.f.grid), md2.item, 1, md2.f.row++, 1, 1);
+        md2.bomb = gtk_combo_box_text_new();
+        for (guint i = 0; i < G_N_ELEMENTS(bombs); i++)
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(md2.bomb), bombs[i][0],
+                                      bombs[i][1]);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(md2.bomb), 0);
+        md2.bomb_label = gtk_label_new_with_mnemonic("_Bombing:");
+        gtk_label_set_xalign(GTK_LABEL(md2.bomb_label), 1.0);
+        gtk_label_set_mnemonic_widget(GTK_LABEL(md2.bomb_label), md2.bomb);
+        gtk_grid_attach(GTK_GRID(md2.f.grid), md2.bomb_label, 0, md2.f.row, 1, 1);
+        gtk_grid_attach(GTK_GRID(md2.f.grid), md2.bomb, 1, md2.f.row++, 1, 1);
+        g_signal_connect_swapped(md2.planes, "changed", G_CALLBACK(air_update),
+                                 NULL);
+        g_signal_connect_swapped(md2.escorts, "changed", G_CALLBACK(air_update),
+                                 NULL);
+        g_signal_connect_swapped(md2.from, "changed", G_CALLBACK(air_update),
+                                 NULL);
+        g_signal_connect_swapped(md2.dest, "changed", G_CALLBACK(air_update),
+                                 NULL);
+        g_signal_connect_swapped(md2.item, "changed", G_CALLBACK(air_update),
+                                 NULL);
+        g_signal_connect_swapped(md2.bomb, "changed", G_CALLBACK(air_update),
+                                 NULL);
+        g_signal_connect(md2.planes, "focus-in-event", G_CALLBACK(entry_focus),
+                         &md2.f);
+        g_signal_connect(md2.from, "focus-in-event", G_CALLBACK(entry_focus),
+                         &md2.f);
+        g_signal_connect(md2.dest, "focus-in-event", G_CALLBACK(entry_focus),
+                         &md2.f);
+        g_signal_connect(md2.f.ok, "clicked", G_CALLBACK(air_ok), NULL);
+        g_signal_connect(md2.f.win, "destroy", G_CALLBACK(air_destroyed), NULL);
+        frame_show(&md2.f, air_pick, &md2);
+    }
+    if (have_sector)
+        air_pick(x, y, NULL);
+    air_update();
+    gtk_window_present(GTK_WINDOW(md2.f.win));
+    mapview_set_pick(air_pick, &md2);
+}

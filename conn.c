@@ -27,6 +27,7 @@ typedef struct {
     CmdDoneFunc done;
     gpointer data;
     GQueue answers;             /* char *: replies to the server's prompts */
+    CmdAnswerFunc responder;    /* or a function that chooses replies */
 } EmpCmd;
 
 static struct {
@@ -569,6 +570,21 @@ play_line(int id, const char *text)
             g_free(a);
             return;
         }
+        if (c && c->responder) {
+            char *plain = emp_text_decode(text, cs.utf8, NULL);
+            char *a = c->responder(plain, c->data);
+
+            g_free(plain);
+            if (a) {
+                if (c->flags & CMD_SHOW) {
+                    out_text(text, "question");
+                    out_text(a, "answer");
+                }
+                send_line(a);
+                g_free(a);
+                return;
+            }
+        }
         if (c && (c->flags & CMD_STOP) && text[0] == '<') {
             /* the end of a navigate or march: stop there */
             out_text(text, "question");
@@ -656,7 +672,8 @@ process_line(const char *line)
 
 static void
 queue_command(const char *cmd, guint flags, CmdLineFunc line,
-              const char *const *answers, CmdDoneFunc done, gpointer data)
+              const char *const *answers, CmdAnswerFunc responder,
+              CmdDoneFunc done, gpointer data)
 {
     EmpCmd *c;
 
@@ -671,6 +688,7 @@ queue_command(const char *cmd, guint flags, CmdLineFunc line,
     c->text = g_strdup(cmd);
     c->flags = flags;
     c->line = line;
+    c->responder = responder;
     c->done = done;
     c->data = data;
     for (int i = 0; answers && answers[i]; i++)
@@ -684,14 +702,21 @@ void
 conn_command(const char *cmd, guint flags, CmdLineFunc line, CmdDoneFunc done,
              gpointer data)
 {
-    queue_command(cmd, flags, line, NULL, done, data);
+    queue_command(cmd, flags, line, NULL, NULL, done, data);
 }
 
 void
 conn_command_answers(const char *cmd, guint flags, const char *const *answers,
                      CmdDoneFunc done, gpointer data)
 {
-    queue_command(cmd, flags, NULL, answers, done, data);
+    queue_command(cmd, flags, NULL, answers, NULL, done, data);
+}
+
+void
+conn_command_responder(const char *cmd, guint flags, CmdAnswerFunc responder,
+                       CmdDoneFunc done, gpointer data)
+{
+    queue_command(cmd, flags, NULL, NULL, responder, done, data);
 }
 
 void

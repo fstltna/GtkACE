@@ -283,7 +283,7 @@ status_set_question(const char *q)
 void
 status_hover(int x, int y, gboolean valid)
 {
-    char t[96];
+    char t[160];
     Sector *s;
 
     if (!valid) {
@@ -296,6 +296,17 @@ status_hover(int x, int y, gboolean valid)
                  *world_des_name(s->des) ? world_des_name(s->des) : "?");
     else
         snprintf(t, sizeof(t), " %d,%d ", x, y);
+    {
+        const char *note = mapview_marker_note(x, y);
+
+        if (note && *note) {
+            char *full = g_strdup_printf("%s  %s", t, note);
+
+            gtk_label_set_text(GTK_LABEL(mw.st_hover), full);
+            g_free(full);
+            return;
+        }
+    }
     gtk_label_set_text(GTK_LABEL(mw.st_hover), t);
 }
 
@@ -1123,6 +1134,19 @@ act_reports(GtkWidget *w, gpointer d)
 }
 
 static void
+act_tool(GtkWidget *w, gpointer fn)
+{
+    ((void (*)(void))fn)();
+}
+
+static void
+act_clear_markers(GtkWidget *w, gpointer d)
+{
+    mapview_clear_markers(-1);
+    mapview_show_range(0, 0, -1);
+}
+
+static void
 act_reports_toggled(GtkCheckMenuItem *ck, gpointer d)
 {
     if (db_is_open())
@@ -1276,6 +1300,8 @@ build_menus(void)
     g_signal_connect(mw.reports_check, "toggled",
                      G_CALLBACK(act_reports_toggled), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(m), mw.reports_check);
+    add_item(m, "C_lear Markers", G_CALLBACK(act_clear_markers), NULL, FALSE,
+             NULL);
     add_sep(m);
     for (int c = 0; c < UC_COUNT; c++) {
         static const char *labels[UC_COUNT] = {
@@ -1388,6 +1414,20 @@ build_menus(void)
     add_cmd(m, "_Update Times", "update");
     add_cmd(m, "_Version", "version");
     add_cmd(m, "W_ire", "wire");
+
+    m = add_menu(bar, "_Tools");
+    add_item(m, "_Production Summary...", G_CALLBACK(act_tool),
+             (gpointer)tool_production, TRUE, NULL);
+    add_item(m, "_Build Projection...", G_CALLBACK(act_tool),
+             (gpointer)tool_build_projection, FALSE, NULL);
+    add_item(m, "_Famine Relief...", G_CALLBACK(act_tool),
+             (gpointer)tool_famine, TRUE, NULL);
+    add_item(m, "_Che and Plague Markers...", G_CALLBACK(act_tool),
+             (gpointer)tool_che_plague, FALSE, NULL);
+    add_item(m, "F_ortify...", G_CALLBACK(act_tool),
+             (gpointer)tool_fortify, FALSE, NULL);
+    add_item(m, "_Range Table...", G_CALLBACK(act_tool),
+             (gpointer)tool_range, TRUE, NULL);
 
     m = add_menu(bar, "_Diplomacy");
     add_item(m, "_Telegrams...", G_CALLBACK(act_telegrams), NULL, FALSE,

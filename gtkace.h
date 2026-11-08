@@ -206,6 +206,15 @@ void       mapview_clear_pick(gpointer data);   /* if data still owns it */
 /* Draw a path (Empire directions yugjbn) from x,y; NULL path clears */
 void       mapview_show_path(int x, int y, const char *path);
 
+/* Event markers (WinACE MarkSector): rings with a note, set by tools */
+enum { MK_PROBLEM, MK_CHE, MK_PLAGUE, MK_STARVE, MK_COUNT };
+void       mapview_add_marker(int x, int y, int kind, const char *note);
+void       mapview_clear_markers(int kind);    /* -1 for all */
+const char *mapview_marker_note(int x, int y); /* NULL if none */
+/* Shade the sectors within range of x,y; range < 0 clears */
+void       mapview_show_range(int x, int y, int range);
+int        world_distance(int x1, int y1, int x2, int y2);
+
 /* ---------------------------------------------------- command dialogs */
 
 void       dlg_move(int x, int y, gboolean have_sector);
@@ -236,6 +245,18 @@ void        report_command_end(void);
 void        reports_show_window(void);
 gboolean    reports_enabled(void);
 void        reports_set_enabled(gboolean on);
+/* Split an Empire table into rows of cells (GStrv); *heads gets the
+ * column headings.  NULL if the lines hold no table. */
+GPtrArray  *report_parse_table(GPtrArray *lines, char ***heads);
+
+/* -------------------------------------------------------------- tools */
+
+void        tool_production(void);
+void        tool_build_projection(void);
+void        tool_famine(void);
+void        tool_che_plague(void);
+void        tool_fortify(void);
+void        tool_range(void);
 
 /* ---------------------------------------------------- colour schemes */
 

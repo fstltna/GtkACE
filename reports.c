@@ -171,6 +171,8 @@ table_free(Table *t)
     g_free(t);
 }
 
+static char *cell_text(const char *line, int s, int e);
+
 static Table *
 find_table(GPtrArray *lines)
 {
@@ -281,6 +283,31 @@ find_table(GPtrArray *lines)
         if (!t->heads[k])
             t->heads[k] = g_strdup("");
     return t;
+}
+
+GPtrArray *
+report_parse_table(GPtrArray *lines, char ***heads)
+{
+    Table *t = find_table(lines);
+    GPtrArray *rows;
+
+    if (!t)
+        return NULL;
+    rows = g_ptr_array_new_with_free_func((GDestroyNotify)g_strfreev);
+    for (int i = t->first; i <= t->last; i++) {
+        const char *l = g_ptr_array_index(lines, i);
+        char **cells = g_new0(char *, t->ncols + 1);
+
+        for (int k = 0; k < t->ncols; k++)
+            cells[k] = cell_text(l, t->start[k], t->end[k]);
+        g_ptr_array_add(rows, cells);
+    }
+    if (heads) {
+        *heads = t->heads;
+        t->heads = NULL;
+    }
+    table_free(t);
+    return rows;
 }
 
 /* Sort numbers as numbers: "96%", "$600", "3.6K", and sectors by row */

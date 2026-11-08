@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.8.0):
+Working now (0.9.0):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,
@@ -65,14 +65,22 @@ Working now (0.8.0):
   production, ship lists ...) open in tabs; Empire's tables become sortable
   tables, and double-clicking a row finds it on the map.  Refresh, copy
   and save.
+* Tools menu, WinACE's tools, using the server's own figures:
+  Production Summary (what the next update makes and uses, and the
+  sectors starving, short of materials or idle, marked on the map);
+  Build Projection (how many of each ship, unit, plane or nuke a sector
+  can build now, and what it is short of); Famine Relief (the nearest
+  food for each starving sector, moved or brought by thresholds);
+  Che and Plague Markers (rebels, plague and starvation from your
+  bulletins, marked on the map); Fortify (uses the mobility your land
+  units would lose at the update); Range Table (sstat, lstat and pstat,
+  with a unit's gun or flying range shaded on the map).
 * Offline mode: open a game's saved map without connecting
 * Report menus and toolbar (budget, census, nation, news, power, report,
   starvation, wire, relations, maps and more)
 
 Planned for later milestones: more intelligence sources (radar maps,
-recon and satellite pictures, attack and battle reports) and WinACE's
-tools (production, build projection, famine relief, fortify, range
-table ...).
+recon and satellite pictures, attack and battle reports).
 
 ## Building
 

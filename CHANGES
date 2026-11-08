@@ -1,3 +1,30 @@
+GtkACE 0.9.0 (2026-11-07)
+
+  Tools menu, as WinACE's tools.  They ask the server for its figures
+  (production, starvation, sstat, lstat, pstat), so they match the
+  server's version and options:
+  - Production Summary: per commodity, what you have, what the next
+    update makes and uses, and the change, for all sectors or one
+    distribution sector; and the sectors that will starve, are short of
+    materials or make nothing, optionally marked on the map.
+  - Build Projection: your harbors, headquarters, airfields or nuclear
+    plants, and for each type how many the sector can build with its
+    lcm, hcm, avail and your money, and what it is short of; Build Here...
+    opens the Build dialog.
+  - Famine Relief: each sector that will starve, the food it needs and
+    the nearest sector with food to spare, within a distance and keeping
+    a share you choose.  Move Food moves it now; Set Thresholds raises
+    food thresholds so distribution brings it.
+  - Che and Plague Markers: marks the sectors your bulletins and
+    production reports say have rebels, plague or starvation.
+  - Fortify: fortifies land units with the mobility they would lose at
+    the update (or all of it), from the server's mobility settings.
+  - Range Table: ship, land unit and plane statistics at their tech;
+    Show Range shades the sectors a unit's guns reach (worked out as the
+    server does) or a plane can fly to.
+  - Markers show on the map with a coloured ring; hover over a sector to
+    read its note.  View -> Clear Markers removes them.
+
 GtkACE 0.8.0 (2026-11-07)
 
   Reports window (View -> Reports Window, Ctrl+R), as WinACE's frmReport:

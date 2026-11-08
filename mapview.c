@@ -101,7 +101,96 @@ static struct {
     /* path being shown */
     char *path;
     int path_x, path_y;
-} mv = { NULL, 0, 0, 16.0, FALSE, 0, 0 };
+    /* range being shown */
+    int range, range_x, range_y;
+} mv = { NULL, 0, 0, 16.0, FALSE, 0, 0, .range = -1 };
+
+typedef struct {
+    int x, y, kind;
+    char *note;
+} Marker;
+
+static GPtrArray *markers;      /* Marker * */
+
+static const double marker_rgb[MK_COUNT][3] = {
+    { 1.0, 0.55, 0.0 },         /* problem: orange */
+    { 0.9, 0.0, 0.0 },          /* che: red */
+    { 0.6, 0.0, 0.8 },          /* plague: purple */
+    { 0.55, 0.3, 0.0 },         /* starvation: brown */
+};
+
+static void
+marker_free(gpointer p)
+{
+    Marker *m = p;
+
+    g_free(m->note);
+    g_free(m);
+}
+
+void
+mapview_add_marker(int x, int y, int kind, const char *note)
+{
+    Marker *m;
+
+    if (!markers)
+        markers = g_ptr_array_new_with_free_func(marker_free);
+    x = world_wrap_x(x);
+    y = world_wrap_y(y);
+    /* one marker per sector and kind; notes add up */
+    for (guint i = 0; i < markers->len; i++) {
+        m = g_ptr_array_index(markers, i);
+        if (m->x == x && m->y == y && m->kind == kind) {
+            if (note && !strstr(m->note, note)) {
+                char *n = g_strconcat(m->note, "; ", note, NULL);
+
+                g_free(m->note);
+                m->note = n;
+            }
+            mapview_redraw();
+            return;
+        }
+    }
+    m = g_new0(Marker, 1);
+    m->x = x;
+    m->y = y;
+    m->kind = CLAMP(kind, 0, MK_COUNT - 1);
+    m->note = g_strdup(note ? note : "");
+    g_ptr_array_add(markers, m);
+    mapview_redraw();
+}
+
+void
+mapview_clear_markers(int kind)
+{
+    if (!markers)
+        return;
+    for (guint i = markers->len; i-- > 0;)
+        if (kind < 0 || ((Marker *)g_ptr_array_index(markers, i))->kind == kind)
+            g_ptr_array_remove_index(markers, i);
+    mapview_redraw();
+}
+
+const char *
+mapview_marker_note(int x, int y)
+{
+    for (guint i = 0; markers && i < markers->len; i++) {
+        Marker *m = g_ptr_array_index(markers, i);
+
+        if (m->x == x && m->y == y)
+            return m->note;
+    }
+    return NULL;
+}
+
+void
+mapview_show_range(int x, int y, int range)
+{
+    mv.range = range;
+    mv.range_x = world_wrap_x(x);
+    mv.range_y = world_wrap_y(y);
+    mapview_redraw();
+}
 
 typedef struct { double r, g, b; } RGB;
 
@@ -462,6 +551,26 @@ draw(GtkWidget *w, cairo_t *cr, gpointer data)
             cairo_fill_preserve(cr);
             cairo_set_source_rgb(cr, 0.25, 0.25, 0.25);
             cairo_stroke(cr);
+            if (mv.range >= 0 && world_distance(x, y, mv.range_x, mv.range_y)
+                <= mv.range) {
+                hex_path(cr, px, py, s);
+                cairo_set_source_rgba(cr, 1, 1, 1, 0.35);
+                cairo_fill(cr);
+            }
+            for (guint mi = 0; markers && mi < markers->len; mi++) {
+                Marker *mk = g_ptr_array_index(markers, mi);
+
+                if (mk->x != world_wrap_x(x) || mk->y != world_wrap_y(y))
+                    continue;
+                cairo_save(cr);
+                cairo_set_source_rgb(cr, marker_rgb[mk->kind][0],
+                                     marker_rgb[mk->kind][1],
+                                     marker_rgb[mk->kind][2]);
+                cairo_set_line_width(cr, MAX(2.0, s / 6));
+                cairo_arc(cr, px, py, s * 0.72, 0, 2 * G_PI);
+                cairo_stroke(cr);
+                cairo_restore(cr);
+            }
             if (sel) {
                 hex_path(cr, px, py, s - 1.5);
                 cairo_set_source_rgb(cr, 1, 0.2, 0.2);

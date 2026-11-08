@@ -396,6 +396,16 @@ world_wrap_x(int x)
     return x - world_x / 2;
 }
 
+/* Empire's distance between sectors (mapdist): rows count one each,
+ * and two x steps make one sector sideways */
+int
+world_distance(int x1, int y1, int x2, int y2)
+{
+    int dx = abs(world_wrap_x(x1 - x2)), dy = abs(world_wrap_y(y1 - y2));
+
+    return dy + (dx > dy ? (dx - dy) / 2 : 0);
+}
+
 int
 world_wrap_y(int y)
 {

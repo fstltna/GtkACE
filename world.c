@@ -7,6 +7,7 @@
  * Only sectors with x + y even exist.
  */
 #include <string.h>
+#include <stdlib.h>
 #include <sqlite3.h>
 #include "gtkace.h"
 
@@ -26,6 +27,14 @@ static const char *unit_nouns[UC_COUNT][2] = {
 static GPtrArray *units[UC_COUNT];      /* Unit * */
 static GHashTable *unit_mnem[UC_COUNT];  /* type -> "dd" */
 static GHashTable *unit_tname[UC_COUNT]; /* type -> "destroyer" */
+
+/* The type names exactly as the server prints them ("dd   destroyer"),
+ * longest first so the longest match wins */
+typedef struct { char *name; int len; int type; int cls; } TypeName;
+static GPtrArray *type_names;           /* TypeName * */
+static GHashTable *des_by_name;          /* "harbor" -> mnemonic */
+#define MAX_REL 256
+static signed char relations[MAX_REL];
 
 const char *
 world_unit_table(UnitClass c)
@@ -86,6 +95,158 @@ world_unit_describe(const Unit *u)
 
 static sqlite3_stmt *prepare(const char *sql);
 
+static void
+free_type_name(gpointer p)
+{
+    TypeName *t = p;
+
+    g_free(t->name);
+    g_free(t);
+}
+
+static int
+by_length(gconstpointer a, gconstpointer b)
+{
+    const TypeName *x = *(TypeName *const *)a, *y = *(TypeName *const *)b;
+
+    return y->len - x->len;
+}
+
+char
+world_des_by_name(const char *name)
+{
+    gpointer v = des_by_name ? g_hash_table_lookup(des_by_name, name) : NULL;
+
+    return (char)GPOINTER_TO_INT(v);
+}
+
+int
+world_country_by_name(const char *name)
+{
+    GHashTableIter it;
+    gpointer k, v;
+
+    if (!countries || !name || !*name)
+        return -1;
+    g_hash_table_iter_init(&it, countries);
+    while (g_hash_table_iter_next(&it, &k, &v))
+        if (!strcmp(v, name))
+            return GPOINTER_TO_INT(k);
+    return -1;
+}
+
+int
+world_match_unit_type(const char *text, int *type, int *len)
+{
+    if (!type_names)
+        return -1;
+    for (guint i = 0; i < type_names->len; i++) {
+        TypeName *t = g_ptr_array_index(type_names, i);
+
+        /* the name must end at a word boundary */
+        if (!strncmp(text, t->name, t->len)
+            && (text[t->len] == ' ' || text[t->len] == '(' || !text[t->len])) {
+            *type = t->type;
+            *len = t->len;
+            return t->cls;
+        }
+    }
+    return -1;
+}
+
+int
+world_relation(int cnum)
+{
+    return cnum >= 0 && cnum < MAX_REL ? relations[cnum] : -1;
+}
+
+int
+world_relation_kind(int cnum)
+{
+    switch (world_relation(cnum)) {
+    case 0: case 1:             /* at war, hostile */
+        return REL_ENEMY;
+    case 3: case 4:             /* friendly, allied */
+        return REL_ALLIED;
+    default:
+        return REL_NEUTRAL;
+    }
+}
+
+/* Our row of the relations table: relations0 .. relationsN */
+static void
+load_relations(void)
+{
+    sqlite3_stmt *st;
+    char *sql;
+
+    if (my_cnum < 0 || !db_table_exists("relat"))
+        return;
+    sql = g_strdup_printf("SELECT * FROM relat WHERE uid=%d", my_cnum);
+    st = prepare(sql);
+    g_free(sql);
+    if (!st)
+        return;
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        int n = sqlite3_column_count(st);
+
+        for (int i = 0; i < n; i++) {
+            const char *col = sqlite3_column_name(st, i);
+            int c;
+
+            if (g_str_has_prefix(col, "relations")
+                && (c = atoi(col + 9)) >= 0 && c < MAX_REL)
+                relations[c] = sqlite3_column_int(st, i);
+        }
+    }
+    sqlite3_finalize(st);
+}
+
+/* What we have seen of other countries (intel.c fills the tables) */
+static void
+load_intel(void)
+{
+    sqlite3_stmt *st;
+    gint64 old = g_get_real_time() / G_USEC_PER_SEC - INTEL_OLD_SECONDS;
+
+    if (db_table_exists("intel_sect")
+        && (st = prepare("SELECT x, y, owner, des, eff FROM intel_sect"))) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            Sector *s = world_sector(sqlite3_column_int(st, 0),
+                                     sqlite3_column_int(st, 1));
+            const char *d = (const char *)sqlite3_column_text(st, 3);
+
+            /* our own data wins */
+            if (!s || (s->own >= 0 && s->own == my_cnum))
+                continue;
+            s->own = sqlite3_column_int(st, 2);
+            if (d && d[0])
+                s->des = d[0];
+            s->eff = CLAMP(sqlite3_column_int(st, 4), 0, 100);
+            s->intel = TRUE;
+        }
+        sqlite3_finalize(st);
+    }
+    if (db_table_exists("intel_unit")
+        && (st = prepare("SELECT cls, owner, x, y, seen FROM intel_unit"))) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            int cls = sqlite3_column_int(st, 0);
+            int own = sqlite3_column_int(st, 1);
+            Sector *s = world_sector(sqlite3_column_int(st, 2),
+                                     sqlite3_column_int(st, 3));
+            int kind;
+
+            if (!s || cls < 0 || cls > UC_PLANE || (own >= 0 && own == my_cnum))
+                continue;
+            kind = sqlite3_column_int64(st, 4) < old ? REL_OLD
+                : world_relation_kind(own);
+            if (s->foreign[cls][kind] < 255)
+                s->foreign[cls][kind]++;
+        }
+        sqlite3_finalize(st);
+    }
+}
+
 /* "dd   destroyer" -> mnemonic "dd", name "destroyer" */
 static void
 load_unit_types(UnitClass c)
@@ -113,6 +274,15 @@ load_unit_types(UnitClass c)
 
             if (!n)
                 continue;
+            {
+                TypeName *t = g_new(TypeName, 1);
+
+                t->name = g_strdup(n);
+                t->len = strlen(n);
+                t->type = type;
+                t->cls = c;
+                g_ptr_array_add(type_names, t);
+            }
             sp = strchr(n, ' ');
             g_hash_table_insert(unit_mnem[c], GINT_TO_POINTER(type),
                                 sp ? g_strndup(n, sp - n) : g_strdup(n));
@@ -300,6 +470,14 @@ world_load(void)
     my_cnum = -1;
     for (int c = 0; c < UC_COUNT; c++)
         g_ptr_array_set_size(world_units(c), 0);
+    if (!type_names)
+        type_names = g_ptr_array_new_with_free_func(free_type_name);
+    g_ptr_array_set_size(type_names, 0);
+    if (!des_by_name)
+        des_by_name = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+                                            NULL);
+    g_hash_table_remove_all(des_by_name);
+    memset(relations, -1, sizeof(relations));
     if (!db_is_open())
         return;
 
@@ -351,6 +529,9 @@ world_load(void)
             if (uid >= 0 && uid < 256 && m && m[0] && !m[1]
                 && (unsigned char)m[0] < 128) {
                 mnem_by_uid[uid] = m[0];
+                if (n)
+                    g_hash_table_insert(des_by_name, g_strdup(n),
+                                        GINT_TO_POINTER((int)m[0]));
                 g_free(des_names[(unsigned char)m[0]]);
                 des_names[(unsigned char)m[0]] = g_strdup(n ? n : "");
             }
@@ -397,4 +578,7 @@ world_load(void)
 
     for (int c = 0; c < UC_COUNT; c++)
         load_units(c);
+    g_ptr_array_sort(type_names, by_length);
+    load_relations();
+    load_intel();
 }

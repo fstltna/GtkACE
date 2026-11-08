@@ -108,7 +108,13 @@ typedef struct {
     short own;           /* owner country number, -1 = unknown */
     guchar eff;
     guchar units[UC_COUNT];   /* our units here, saturating at 255 */
+    /* other countries' ships, land units and planes seen here, by
+     * relation: enemy, allied, neutral, old (not seen recently) */
+    guchar foreign[3][4];
+    gboolean intel;      /* own/des come from a sighting, not our data */
 } Sector;
+
+enum { REL_ENEMY, REL_ALLIED, REL_NEUTRAL, REL_OLD };
 
 typedef struct {
     UnitClass cls;
@@ -135,6 +141,26 @@ GPtrArray  *world_units(UnitClass c);
 const char *world_unit_mnem(UnitClass c, int type);   /* "dd" */
 const char *world_unit_type_name(UnitClass c, int type); /* "destroyer" */
 char       *world_unit_describe(const Unit *u);       /* newly allocated */
+/* Lookups by the names the server prints */
+char        world_des_by_name(const char *name);      /* 0 if unknown */
+int         world_country_by_name(const char *name);  /* -1 if unknown */
+/* Match a unit description such as "dd   destroyer (#4)" at the start
+ * of text: returns the class (or -1) and sets *type and *len (chars
+ * of the type name consumed). */
+int         world_match_unit_type(const char *text, int *type, int *len);
+/* Our relation with a country: 0 at war .. 4 allied, -1 unknown */
+int         world_relation(int cnum);
+int         world_relation_kind(int cnum);           /* REL_ENEMY ... */
+
+/* ------------------------------------------------------------ intel */
+
+#define INTEL_OLD_SECONDS (24 * 3600)   /* older sightings show as old */
+
+void        intel_command_start(const char *cmd);
+void        intel_line(const char *text);         /* plain UTF-8 */
+void        intel_command_end(void);
+void        intel_clear(void);
+char       *intel_age(gint64 seen);               /* "5 min ago" */
 
 /* --------------------------------------------------------------- map */
 
@@ -147,7 +173,8 @@ gboolean   mapview_selected(int *x, int *y);
 
 /* ------------------------------------------------------ units window */
 
-void       units_window_show(UnitClass c);
+void       units_window_show(int page);   /* UnitClass, or UC_COUNT for
+                                           foreign sightings */
 void       units_window_refresh(void);   /* data changed */
 
 /* --------------------------------------------------------- view options */

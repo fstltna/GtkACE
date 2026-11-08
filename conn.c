@@ -179,6 +179,7 @@ conn_close(const char *why)
     g_clear_pointer(&cs.question, g_free);
     status_set_question(NULL);
     set_state(CONN_DOWN, why);
+    intel_command_end();
     flush_queue();
     status_set_busy(0);
     if (why && *why)
@@ -469,6 +470,8 @@ send_next(void)
     if (is_read_cmd(c->text))
         status_set_mail(NULL);
     if (c->flags & CMD_SHOW)
+        intel_command_start(c->text);
+    if (c->flags & CMD_SHOW)
         out_prompt(c->text);
     send_line(c->text);
     status_set_busy(conn_queue_length());
@@ -481,6 +484,8 @@ command_finished(void)
 
     cs.current = NULL;
     if (c) {
+        if (c->flags & CMD_SHOW)
+            intel_command_end();
         if (c->done)
             c->done(c->data);
         if (c->flags & CMD_USER)
@@ -585,6 +590,12 @@ play_line(int id, const char *text)
         handle_inform(text);
     if (c && c->line)
         c->line(id, text, c->data);
+    if (c && (c->flags & CMD_SHOW) && id == C_DATA) {
+        char *plain = emp_text_decode(text, cs.utf8, NULL);
+
+        intel_line(plain);
+        g_free(plain);
+    }
     if (!c || (c->flags & CMD_SHOW))
         out_server_line(id, text, cs.utf8);
 }

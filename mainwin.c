@@ -75,7 +75,8 @@ emp_text_decode(const char *raw, gboolean utf8, int **hl)
             continue;
         }
         if (c == 7) {
-            if (mw.win)
+            /* ring only for text being displayed (hl is wanted then) */
+            if (mw.win && hl)
                 gdk_window_beep(gtk_widget_get_window(mw.win));
             continue;
         }
@@ -451,6 +452,114 @@ panel_set(const char *key, const char *val)
         gtk_label_set_text(GTK_LABEL(l), val ? val : "");
 }
 
+/* What we have seen of a sector that isn't ours.  TRUE if anything. */
+static gboolean
+panel_intel_sector(int x, int y, GString *title)
+{
+    static const char *cols[] = {
+        "eff", "effic", "civ", "civil", "mil", "milit", "shell", "shell",
+        "gun", "gun", "petrol", "petrol", "food", "food", "bar", "bar",
+        "road", "road", "rail", "rail", "defense", "dfense", NULL
+    };
+    sqlite3_stmt *st;
+    gboolean have = FALSE;
+
+    if (!db_table_exists("intel_sect")
+        || sqlite3_prepare_v2(db_handle(), "SELECT * FROM intel_sect WHERE x=? "
+                              "AND y=?", -1, &st, NULL) != SQLITE_OK)
+        return FALSE;
+    sqlite3_bind_int(st, 1, x);
+    sqlite3_bind_int(st, 2, y);
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        int n = sqlite3_column_count(st);
+        gint64 seen = 0;
+        const char *source = "";
+
+        have = TRUE;
+        for (int i = 0; i < n; i++) {
+            const char *col = sqlite3_column_name(st, i);
+            gboolean null = sqlite3_column_type(st, i) == SQLITE_NULL;
+            const char *v = (const char *)sqlite3_column_text(st, i);
+
+            if (!strcmp(col, "owner") && !null) {
+                int o = sqlite3_column_int(st, i);
+                char *t = g_strdup_printf("%s (#%d)", world_country_name(o), o);
+
+                panel_set("owner", t);
+                g_free(t);
+            } else if (!strcmp(col, "seen")) {
+                seen = sqlite3_column_int64(st, i);
+            } else if (!strcmp(col, "source")) {
+                source = v ? v : "";
+            } else if (!null) {
+                for (int j = 0; cols[j]; j += 2) {
+                    if (strcmp(col, cols[j]))
+                        continue;
+                    if (!strcmp(col, "eff") || !strcmp(col, "road")
+                        || !strcmp(col, "rail") || !strcmp(col, "defense")) {
+                        char *t = g_strdup_printf("%s%%", v);
+
+                        panel_set(cols[j + 1], t);
+                        g_free(t);
+                    } else {
+                        panel_set(cols[j + 1], v);
+                    }
+                }
+            }
+        }
+        {
+            char *age = intel_age(seen);
+
+            g_string_append_printf(title, "\nseen %s%s%s", age,
+                                   *source ? " by " : "", source);
+            g_free(age);
+        }
+    }
+    sqlite3_finalize(st);
+    return have;
+}
+
+/* Other countries' units seen in a sector; appends lines to u */
+static int
+panel_intel_units(int x, int y, GString *u, int *shown)
+{
+    sqlite3_stmt *st;
+    int total = 0;
+
+    if (!db_table_exists("intel_unit")
+        || sqlite3_prepare_v2(db_handle(), "SELECT cls, uid, owner, type, mil, "
+                              "seen FROM intel_unit WHERE x=? AND y=? "
+                              "ORDER BY cls, uid", -1, &st, NULL) != SQLITE_OK)
+        return 0;
+    sqlite3_bind_int(st, 1, x);
+    sqlite3_bind_int(st, 2, y);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        int cls = sqlite3_column_int(st, 0), own = sqlite3_column_int(st, 2);
+        int type = sqlite3_column_int(st, 3);
+        char *age;
+
+        if (cls < 0 || cls >= UC_COUNT)
+            continue;
+        total++;
+        if (*shown >= 30)
+            continue;
+        age = intel_age(sqlite3_column_int64(st, 5));
+        g_string_append_printf(u, "%s%s: %s #%d  %s %s, %s",
+                               u->len ? "\n" : "",
+                               own >= 0 ? world_country_name(own) : "unknown",
+                               world_unit_noun(cls, FALSE),
+                               sqlite3_column_int(st, 1),
+                               world_unit_mnem(cls, type),
+                               world_unit_type_name(cls, type), age);
+        if (sqlite3_column_type(st, 4) != SQLITE_NULL)
+            g_string_append_printf(u, " (~%d mil)", sqlite3_column_int(st, 4));
+        g_free(age);
+        (*shown)++;
+    }
+    sqlite3_finalize(st);
+    return total;
+}
+
 void
 panel_show_sector(int x, int y)
 {
@@ -516,6 +625,8 @@ panel_show_sector(int x, int y)
         }
         sqlite3_finalize(st);
     }
+    if (!have)
+        have = panel_intel_sector(x, y, title);
     gtk_label_set_text(GTK_LABEL(mw.panel_title), title->str);
 
     /* our units in this sector */
@@ -541,6 +652,7 @@ panel_show_sector(int x, int y)
                 shown++;
             }
         }
+        total += panel_intel_units(x, y, u, &shown);
         if (total > shown)
             g_string_append_printf(u, "\n... and %d more", total - shown);
         if (total) {
@@ -618,6 +730,7 @@ refresh_all(void)
     db_fetch_table("nuke-chr", NULL, NULL);
     db_fetch_table("nat", NULL, NULL);
     db_fetch_table("country", NULL, NULL);
+    db_fetch_table("relat", NULL, NULL);
     db_fetch_table("sect", NULL, NULL);
     fetch_units();
     db_fetch_bmap(refresh_finished, "Database");
@@ -648,6 +761,11 @@ static const char *changing_cmds[] = {
     "sweep", "name", "fuel", "morale", "supply", "harden", "fortify",
     "assault", "attack", "board", "lmine", "mine", "torpedo", "fire",
     "transport", "order", "qorder", "sorder",
+    /* these update the bmap on the server */
+    "lookout", "llook", "radar", "lradar", "sonar", "coastwatch",
+    "skywatch", "spy",
+    /* diplomacy changes how other countries' units are shown */
+    "declare",
     /* deity */
     "edit", "give", "setsector", "setresource", "swapsector",
     NULL
@@ -665,6 +783,7 @@ changed_refresh(gpointer d)
     if (conn_busy() || conn_wants_input() || mw.refreshing)
         return G_SOURCE_CONTINUE;       /* wait for a quiet moment */
     changed_timer = 0;
+    db_fetch_table("relat", NULL, NULL);
     db_fetch_table("sect", NULL, NULL);
     fetch_units();
     db_fetch_bmap(refresh_finished, NULL);
@@ -937,6 +1056,25 @@ act_clear(GtkWidget *w, gpointer d)
 }
 
 static void
+act_clear_intel(GtkWidget *w, gpointer d)
+{
+    GtkWidget *m;
+
+    if (!db_is_open())
+        return;
+    m = gtk_message_dialog_new(GTK_WINDOW(mw.win), GTK_DIALOG_MODAL,
+                               GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
+                               "Forget everything seen of other countries?");
+    gtk_message_dialog_format_secondary_text(
+        GTK_MESSAGE_DIALOG(m), "This removes the sectors and units recorded "
+        "from lookout, coastwatch, radar, sonar and spy reports in this "
+        "game.  Your own data is kept.");
+    if (gtk_dialog_run(GTK_DIALOG(m)) == GTK_RESPONSE_YES)
+        intel_clear();
+    gtk_widget_destroy(m);
+}
+
+static void
 act_about(GtkWidget *w, gpointer d)
 {
     const char *authors[] = {
@@ -1036,6 +1174,8 @@ build_menus(void)
     add_item(m, "_Disconnect", G_CALLBACK(act_disconnect), NULL, TRUE, NULL);
     add_sep(m);
     add_item(m, "C_lear Output", G_CALLBACK(act_clear), NULL, FALSE, NULL);
+    add_item(m, "Clear _Intelligence...", G_CALLBACK(act_clear_intel), NULL,
+             FALSE, NULL);
     add_sep(m);
     add_item(m, "_Quit", G_CALLBACK(act_quit), NULL, FALSE, "<Control>q");
 
@@ -1085,6 +1225,8 @@ build_menus(void)
              FALSE, "<Control>3");
     add_item(m, "_Nukes", G_CALLBACK(act_units), GINT_TO_POINTER(UC_NUKE),
              FALSE, "<Control>4");
+    add_item(m, "_Foreign Units Seen", G_CALLBACK(act_units),
+             GINT_TO_POINTER(UC_COUNT), FALSE, "<Control>5");
     add_sep(m);
     add_cmd(m, "Ship _Cargo", "cargo *");
     add_cmd(m, "Land Unit Car_go", "lcargo *");
@@ -1101,6 +1243,17 @@ build_menus(void)
     add_cmd(m, "_Census", "census *");
     add_cmd(m, "Coast_watch", "coastwatch *");
     add_cmd(m, "Co_mmodity", "commodity *");
+    it = add_item(m, "_Intelligence", NULL, NULL, FALSE, NULL);
+    sub = gtk_menu_new();
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(it), sub);
+    add_cmd(sub, "_Lookout (all ships)", "lookout *");
+    add_cmd(sub, "L_and Unit Lookout", "llook *");
+    add_cmd(sub, "_Radar (all ships)", "radar *");
+    add_cmd(sub, "Land Unit Ra_dar", "lradar *");
+    add_cmd(sub, "_Sonar (all ships)", "sonar *");
+    add_cmd(sub, "_Coastwatch", "coastwatch *");
+    add_cmd(sub, "S_kywatch", "skywatch *");
+    add_cmd(sub, "S_py (all sectors)", "spy *");
     add_cmd(m, "_Level", "level *");
     it = add_item(m, "M_aps", NULL, NULL, FALSE, NULL);
     sub = gtk_menu_new();

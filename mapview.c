@@ -12,28 +12,42 @@
 
 gboolean show_units[UC_COUNT] = { TRUE, TRUE, TRUE, TRUE };
 
-/* Our own units' icons, by class (WinACE ship.gif, land.gif, ...) */
+/* WinACE's unit icons.  Index: class (ship, land, plane) * 5 + kind,
+ * kind 0 = ours, then REL_ENEMY + 1 ... REL_OLD + 1; 15 = nuke. */
 static cairo_surface_t *
-unit_icon(UnitClass c)
+icon_surface(int i)
 {
-    static cairo_surface_t *surf[UC_COUNT];
-    static const guint32 *data[UC_COUNT] = {
-        icon_ship, icon_land, icon_plane, icon_nuke
+    static cairo_surface_t *surf[16];
+    static const guint32 *data[16] = {
+        icon_ship, icon_eship, icon_fship, icon_nship, icon_xship,
+        icon_land, icon_eland, icon_fland, icon_nland, icon_xland,
+        icon_plane, icon_eplane, icon_fplane, icon_nplane, icon_xplane,
+        icon_nuke
     };
 
-    if (!surf[c]) {
+    if (!surf[i]) {
         int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, ICON_W);
         guchar *buf = g_malloc0(stride * ICON_H);
 
         for (int y = 0; y < ICON_H; y++)
-            memcpy(buf + y * stride, data[c] + y * ICON_W, ICON_W * 4);
-        surf[c] = cairo_image_surface_create_for_data(buf, CAIRO_FORMAT_ARGB32,
+            memcpy(buf + y * stride, data[i] + y * ICON_W, ICON_W * 4);
+        surf[i] = cairo_image_surface_create_for_data(buf, CAIRO_FORMAT_ARGB32,
                                                       ICON_W, ICON_H, stride);
     }
-    return surf[c];
+    return surf[i];
 }
 
-/* Up to three icons per hex, placed as WinACE's DrawUnits does.
+/* icon index for unit class c (ship, land, plane) and kind */
+static int
+icon_index(int c, int kind)
+{
+    static const int row[UC_COUNT] = { 0, 5, 10, 15 };
+
+    return c == UC_NUKE ? 15 : row[c] + kind;
+}
+
+/* Up to three icons per hex, placed as WinACE's DrawUnits does: our
+ * units first, then enemy, allied, neutral and old sightings.
  * Returns how many were drawn. */
 static int
 draw_unit_icons(cairo_t *cr, const Sector *sec, double px, double py, double s)
@@ -42,19 +56,26 @@ draw_unit_icons(cairo_t *cr, const Sector *sec, double px, double py, double s)
         { -0.8, -0.5 }, { 0.0, -0.5 }, { -0.4, -0.8 }
     };
     double w = 0.8 * s, h = w * ICON_H / ICON_W;
-    int n = 0;
+    int icons[3], n = 0;
 
-    for (int c = 0; c < UC_COUNT && n < 3; c++) {
-        if (!sec->units[c] || !show_units[c])
-            continue;
+    for (int c = UC_SHIP; c <= UC_PLANE && n < 3; c++)
+        if (sec->units[c] && show_units[c])
+            icons[n++] = icon_index(c, 0);
+    for (int k = REL_ENEMY; k <= REL_OLD && n < 3; k++)
+        for (int c = UC_SHIP; c <= UC_PLANE && n < 3; c++)
+            if (sec->foreign[c][k] && show_units[c])
+                icons[n++] = icon_index(c, k + 1);
+    if (n < 3 && sec->units[UC_NUKE] && show_units[UC_NUKE])
+        icons[n++] = icon_index(UC_NUKE, 0);
+
+    for (int i = 0; i < n; i++) {
         cairo_save(cr);
-        cairo_translate(cr, px + pos[n][0] * s, py + pos[n][1] * s);
+        cairo_translate(cr, px + pos[i][0] * s, py + pos[i][1] * s);
         cairo_scale(cr, w / ICON_W, h / ICON_H);
-        cairo_set_source_surface(cr, unit_icon(c), 0, 0);
+        cairo_set_source_surface(cr, icon_surface(icons[i]), 0, 0);
         cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
         cairo_paint(cr);
         cairo_restore(cr);
-        n++;
     }
     return n;
 }

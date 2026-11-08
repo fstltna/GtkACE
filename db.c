@@ -244,30 +244,58 @@ fetch_line(int id, const char *text, gpointer data)
         g_ptr_array_add(f->cur, tok);
 }
 
-/* Is the stored description of the table the same as the new one? */
+static char *quote_ident(const char *s);
+
+/* Column names for a table description.  A field with a length
+ * (an array, such as the relations of a country to all others) has
+ * one column per element: relations0, relations1, ... */
+static GPtrArray *
+meta_columns(GPtrArray *meta)
+{
+    GPtrArray *cols = g_ptr_array_new_with_free_func(g_free);
+
+    for (guint i = 0; i < meta->len; i++) {
+        GPtrArray *m = g_ptr_array_index(meta, i);
+        const char *name = m->len && m->pdata[0] ? m->pdata[0] : "?";
+        int len = m->len > 3 && m->pdata[3] ? atoi(m->pdata[3]) : 0;
+
+        if (len > 0 && len <= 4096)
+            for (int j = 0; j < len; j++)
+                g_ptr_array_add(cols, g_strdup_printf("%s%d", name, j));
+        else
+            g_ptr_array_add(cols, g_strdup(name));
+    }
+    return cols;
+}
+
+/* Does the stored table have exactly these columns? */
 static gboolean
-meta_unchanged(const char *table, GPtrArray *meta)
+table_matches(const char *table, GPtrArray *cols)
 {
     sqlite3_stmt *st;
+    char *qt, *sql;
     guint n = 0;
     gboolean same = TRUE;
 
     if (!db_table_exists(table))
         return FALSE;
-    if (sqlite3_prepare_v2(db, "SELECT name FROM xmeta WHERE tbl=? ORDER BY idx",
-                           -1, &st, NULL) != SQLITE_OK)
+    qt = quote_ident(table);
+    sql = g_strdup_printf("PRAGMA table_info(%s)", qt);
+    g_free(qt);
+    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) {
+        g_free(sql);
         return FALSE;
-    sqlite3_bind_text(st, 1, table, -1, SQLITE_TRANSIENT);
+    }
+    g_free(sql);
     while (sqlite3_step(st) == SQLITE_ROW) {
-        GPtrArray *m = n < meta->len ? g_ptr_array_index(meta, n) : NULL;
-        const char *name = (const char *)sqlite3_column_text(st, 0);
+        const char *name = (const char *)sqlite3_column_text(st, 1);
 
-        if (!m || !m->pdata[0] || !name || strcmp(name, m->pdata[0]))
+        if (n >= cols->len || !name || strcmp(name, cols->pdata[n]))
             same = FALSE;
         n++;
     }
     sqlite3_finalize(st);
-    return same && n == meta->len;
+    return same && n == cols->len;
 }
 
 static char *
@@ -313,24 +341,26 @@ static gboolean
 store_table(Fetch *f)
 {
     char *qt = quote_ident(f->table), *sql;
+    GPtrArray *cols = meta_columns(f->meta);
     GString *s;
     sqlite3_stmt *st;
-    guint i, j, ncols = f->meta->len;
+    guint i, j, ncols = cols->len;
+    int skipped = 0;
 
     if (!ncols) {
+        g_ptr_array_unref(cols);
         g_free(qt);
         return FALSE;
     }
     exec("BEGIN");
-    if (!meta_unchanged(f->table, f->meta)) {
+    if (!table_matches(f->table, cols)) {
         sql = g_strdup_printf("DROP TABLE IF EXISTS %s", qt);
         exec(sql);
         g_free(sql);
         s = g_string_new(NULL);
         g_string_printf(s, "CREATE TABLE %s (", qt);
         for (i = 0; i < ncols; i++) {
-            GPtrArray *m = g_ptr_array_index(f->meta, i);
-            char *qc = quote_ident(m->len && m->pdata[0] ? m->pdata[0] : "?");
+            char *qc = quote_ident(cols->pdata[i]);
 
             g_string_append_printf(s, "%s%s", i ? ", " : "", qc);
             g_free(qc);
@@ -339,29 +369,31 @@ store_table(Fetch *f)
         if (!exec(s->str)) {
             g_string_free(s, TRUE);
             exec("ROLLBACK");
+            g_ptr_array_unref(cols);
             g_free(qt);
             return FALSE;
         }
         g_string_free(s, TRUE);
-
-        sqlite3_prepare_v2(db, "DELETE FROM xmeta WHERE tbl=?", -1, &st, NULL);
-        sqlite3_bind_text(st, 1, f->table, -1, SQLITE_TRANSIENT);
-        sqlite3_step(st);
-        sqlite3_finalize(st);
-        sqlite3_prepare_v2(db, "INSERT INTO xmeta VALUES (?,?,?,?,?,?,?)", -1,
-                           &st, NULL);
-        for (i = 0; i < ncols; i++) {
-            GPtrArray *m = g_ptr_array_index(f->meta, i);
-
-            sqlite3_reset(st);
-            sqlite3_bind_text(st, 1, f->table, -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int(st, 2, i);
-            for (j = 0; j < 5; j++)
-                bind_value(st, 3 + j, j < m->len ? m->pdata[j] : NULL);
-            sqlite3_step(st);
-        }
-        sqlite3_finalize(st);
     }
+
+    /* remember the description for offline use and later sessions */
+    sqlite3_prepare_v2(db, "DELETE FROM xmeta WHERE tbl=?", -1, &st, NULL);
+    sqlite3_bind_text(st, 1, f->table, -1, SQLITE_TRANSIENT);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+    sqlite3_prepare_v2(db, "INSERT INTO xmeta VALUES (?,?,?,?,?,?,?)", -1,
+                       &st, NULL);
+    for (i = 0; i < f->meta->len; i++) {
+        GPtrArray *m = g_ptr_array_index(f->meta, i);
+
+        sqlite3_reset(st);
+        sqlite3_bind_text(st, 1, f->table, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(st, 2, i);
+        for (j = 0; j < 5; j++)
+            bind_value(st, 3 + j, j < m->len ? m->pdata[j] : NULL);
+        sqlite3_step(st);
+    }
+    sqlite3_finalize(st);
 
     sql = g_strdup_printf("DELETE FROM %s", qt);
     exec(sql);
@@ -376,6 +408,7 @@ store_table(Fetch *f)
         g_warning("SQL error: %s", sqlite3_errmsg(db));
         g_string_free(s, TRUE);
         exec("ROLLBACK");
+        g_ptr_array_unref(cols);
         g_free(qt);
         return FALSE;
     }
@@ -383,8 +416,10 @@ store_table(Fetch *f)
     for (i = 0; i < f->rows->len; i++) {
         GPtrArray *r = g_ptr_array_index(f->rows, i);
 
-        if (r->len != ncols)
-            continue;           /* malformed row */
+        if (r->len != ncols) {
+            skipped++;
+            continue;
+        }
         sqlite3_reset(st);
         for (j = 0; j < ncols; j++)
             bind_value(st, j + 1, r->pdata[j]);
@@ -394,17 +429,12 @@ store_table(Fetch *f)
     }
     sqlite3_finalize(st);
     exec("COMMIT");
+    if (skipped)
+        g_warning("xdump %s: %d rows did not match the %u columns", f->table,
+                  skipped, ncols);
+    g_ptr_array_unref(cols);
     g_free(qt);
     return TRUE;
-}
-
-static void
-fetch_meta_done(gpointer data)
-{
-    Fetch *f = data;
-
-    f->cur = f->rows;
-    f->in_dump = FALSE;
 }
 
 /* Tables whose description was fetched in this login session; a
@@ -426,18 +456,29 @@ load_stored_meta(Fetch *f)
     if (!db || !meta_known || !g_hash_table_contains(meta_known, f->table)
         || !db_table_exists(f->table))
         return FALSE;
-    if (sqlite3_prepare_v2(db, "SELECT name FROM xmeta WHERE tbl=? ORDER BY idx",
-                           -1, &st, NULL) != SQLITE_OK)
+    if (sqlite3_prepare_v2(db, "SELECT name, type, flags, len, symtab FROM "
+                           "xmeta WHERE tbl=? ORDER BY idx", -1, &st,
+                           NULL) != SQLITE_OK)
         return FALSE;
     sqlite3_bind_text(st, 1, f->table, -1, SQLITE_TRANSIENT);
     while (sqlite3_step(st) == SQLITE_ROW) {
         GPtrArray *m = g_ptr_array_new_with_free_func(g_free);
 
-        g_ptr_array_add(m, g_strdup((const char *)sqlite3_column_text(st, 0)));
+        for (int j = 0; j < 5; j++)
+            g_ptr_array_add(m, g_strdup((const char *)sqlite3_column_text(st, j)));
         g_ptr_array_add(f->meta, m);
     }
     sqlite3_finalize(st);
     return f->meta->len > 0;
+}
+
+static void
+fetch_meta_done(gpointer data)
+{
+    Fetch *f = data;
+
+    f->cur = f->rows;
+    f->in_dump = FALSE;
 }
 
 static void

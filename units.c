@@ -65,7 +65,12 @@ typedef struct {
 static struct {
     GtkWidget *win, *notebook, *count;
     Tab tabs[UC_COUNT];
+    GtkListStore *foreign;      /* sightings of other countries' units */
 } uw;
+
+#define FOREIGN_PAGE UC_COUNT
+enum { F_OWNER, F_KIND, F_UID, F_TYPE, F_XY, F_MIL, F_AGE, F_SOURCE, F_X, F_Y,
+       F_SEEN, F_NCOLS };
 
 static int
 col_index(sqlite3_stmt *st, const char *name)
@@ -166,18 +171,74 @@ fill_tab(UnitClass c)
 }
 
 static void
+fill_foreign(void)
+{
+    sqlite3_stmt *st;
+
+    gtk_list_store_clear(uw.foreign);
+    if (!db_is_open() || !db_table_exists("intel_unit")
+        || sqlite3_prepare_v2(db_handle(), "SELECT cls, uid, owner, type, x, y, "
+                              "mil, source, seen FROM intel_unit ORDER BY "
+                              "owner, cls, uid", -1, &st, NULL) != SQLITE_OK)
+        return;
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        int cls = sqlite3_column_int(st, 0), own = sqlite3_column_int(st, 2);
+        int type = sqlite3_column_int(st, 3), x = sqlite3_column_int(st, 4);
+        int y = sqlite3_column_int(st, 5);
+        gint64 seen = sqlite3_column_int64(st, 8);
+        char *owner, *tname, *xy, *age;
+        GtkTreeIter it;
+
+        if (cls < 0 || cls >= UC_COUNT)
+            continue;
+        owner = own >= 0 ? g_strdup_printf("%s (#%d)", world_country_name(own),
+                                           own)
+            : g_strdup("unknown");
+        tname = g_strdup_printf("%-4s %s", world_unit_mnem(cls, type),
+                                world_unit_type_name(cls, type));
+        xy = g_strdup_printf("%d,%d", x, y);
+        age = intel_age(seen);
+        gtk_list_store_append(uw.foreign, &it);
+        gtk_list_store_set(uw.foreign, &it, F_OWNER, owner,
+                           F_KIND, world_unit_noun(cls, FALSE),
+                           F_UID, sqlite3_column_int(st, 1), F_TYPE, tname,
+                           F_XY, xy,
+                           F_MIL, sqlite3_column_type(st, 6) == SQLITE_NULL
+                           ? -1 : sqlite3_column_int(st, 6),
+                           F_AGE, age,
+                           F_SOURCE, sqlite3_column_text(st, 7),
+                           F_X, x, F_Y, y, F_SEEN, seen, -1);
+        g_free(owner);
+        g_free(tname);
+        g_free(xy);
+        g_free(age);
+    }
+    sqlite3_finalize(st);
+}
+
+static void
+set_count_label(int page)
+{
+    GtkTreeModel *m = page == FOREIGN_PAGE ? GTK_TREE_MODEL(uw.foreign)
+        : GTK_TREE_MODEL(uw.tabs[page].store);
+    int n = gtk_tree_model_iter_n_children(m, NULL);
+    char *s;
+
+    if (page == FOREIGN_PAGE)
+        s = g_strdup_printf("%d foreign %s seen", n, n == 1 ? "unit" : "units");
+    else
+        s = g_strdup_printf("%d %s", n, world_unit_noun(page, n != 1));
+    gtk_label_set_text(GTK_LABEL(uw.count), s);
+    g_free(s);
+}
+
+static void
 update_count(void)
 {
     int c = gtk_notebook_get_current_page(GTK_NOTEBOOK(uw.notebook));
-    int n;
-    char *s;
 
-    if (c < 0 || c >= UC_COUNT)
-        return;
-    n = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(uw.tabs[c].store), NULL);
-    s = g_strdup_printf("%d %s", n, world_unit_noun(c, n != 1));
-    gtk_label_set_text(GTK_LABEL(uw.count), s);
-    g_free(s);
+    if (c >= 0 && c <= FOREIGN_PAGE)
+        set_count_label(c);
 }
 
 void
@@ -187,6 +248,7 @@ units_window_refresh(void)
         return;
     for (int c = 0; c < UC_COUNT; c++)
         fill_tab(c);
+    fill_foreign();
     update_count();
 }
 
@@ -293,12 +355,91 @@ static void
 page_switched(GtkNotebook *nb, GtkWidget *page, guint num, gpointer d)
 {
     /* the page index is not current yet during the signal */
-    int n = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(uw.tabs[num].store),
-                                           NULL);
-    char *s = g_strdup_printf("%d %s", n, world_unit_noun(num, n != 1));
+    set_count_label(num);
+}
 
-    gtk_label_set_text(GTK_LABEL(uw.count), s);
-    g_free(s);
+static void
+foreign_activated(GtkTreeView *tv, GtkTreePath *path, GtkTreeViewColumn *col,
+                  gpointer data)
+{
+    GtkTreeModel *m = gtk_tree_view_get_model(tv);
+    GtkTreeIter it;
+    int x, y;
+
+    if (!gtk_tree_model_get_iter(m, &it, path))
+        return;
+    gtk_tree_model_get(m, &it, F_X, &x, F_Y, &y, -1);
+    mapview_center(x, y);
+    mapview_select(x, y);
+    gtk_window_present(mainwin_window());
+}
+
+static int
+sort_foreign_xy(GtkTreeModel *m, GtkTreeIter *a, GtkTreeIter *b, gpointer d)
+{
+    int ax, ay, bx, by;
+
+    gtk_tree_model_get(m, a, F_X, &ax, F_Y, &ay, -1);
+    gtk_tree_model_get(m, b, F_X, &bx, F_Y, &by, -1);
+    return ay != by ? ay - by : ax - bx;
+}
+
+static void
+mil_cell(GtkTreeViewColumn *col, GtkCellRenderer *r, GtkTreeModel *m,
+         GtkTreeIter *it, gpointer data)
+{
+    int v;
+    char buf[16] = "";
+
+    gtk_tree_model_get(m, it, F_MIL, &v, -1);
+    if (v >= 0)
+        snprintf(buf, sizeof(buf), "~%d", v);
+    g_object_set(r, "text", buf, NULL);
+}
+
+static GtkWidget *
+build_foreign(void)
+{
+    static const struct { const char *title; int col, sort; gboolean num; }
+    cols[] = {
+        { "Owner", F_OWNER, F_OWNER, FALSE }, { "Kind", F_KIND, F_KIND, FALSE },
+        { "#", F_UID, F_UID, TRUE }, { "Type", F_TYPE, F_TYPE, FALSE },
+        { "x,y", F_XY, F_X, TRUE }, { "Mil", F_MIL, F_MIL, TRUE },
+        { "Seen", F_AGE, F_SEEN, FALSE }, { "By", F_SOURCE, F_SOURCE, FALSE },
+    };
+    GtkWidget *tv, *sw;
+
+    uw.foreign = gtk_list_store_new(F_NCOLS, G_TYPE_STRING, G_TYPE_STRING,
+                                    G_TYPE_INT, G_TYPE_STRING, G_TYPE_STRING,
+                                    G_TYPE_INT, G_TYPE_STRING, G_TYPE_STRING,
+                                    G_TYPE_INT, G_TYPE_INT, G_TYPE_INT64);
+    gtk_tree_sortable_set_sort_func(GTK_TREE_SORTABLE(uw.foreign), F_X,
+                                    sort_foreign_xy, NULL, NULL);
+    tv = gtk_tree_view_new_with_model(GTK_TREE_MODEL(uw.foreign));
+    gtk_tree_view_set_enable_search(GTK_TREE_VIEW(tv), FALSE);
+    for (guint i = 0; i < G_N_ELEMENTS(cols); i++) {
+        GtkCellRenderer *r = gtk_cell_renderer_text_new();
+        GtkTreeViewColumn *c;
+
+        g_object_set(r, "family", "Monospace", NULL);
+        if (cols[i].num)
+            g_object_set(r, "xalign", 1.0, NULL);
+        if (cols[i].col == F_MIL) {
+            c = gtk_tree_view_column_new_with_attributes(cols[i].title, r, NULL);
+            gtk_tree_view_column_set_cell_data_func(c, r, mil_cell, NULL, NULL);
+        } else {
+            c = gtk_tree_view_column_new_with_attributes(cols[i].title, r,
+                                                         "text", cols[i].col,
+                                                         NULL);
+        }
+        gtk_tree_view_column_set_sort_column_id(c, cols[i].sort);
+        gtk_tree_view_column_set_resizable(c, TRUE);
+        gtk_tree_view_append_column(GTK_TREE_VIEW(tv), c);
+    }
+    g_signal_connect(tv, "row-activated", G_CALLBACK(foreign_activated), NULL);
+    sw = gtk_scrolled_window_new(NULL, NULL);
+    gtk_container_add(GTK_CONTAINER(sw), tv);
+    return sw;
 }
 
 static void
@@ -318,7 +459,7 @@ key_press(GtkWidget *w, GdkEventKey *ev, gpointer d)
 }
 
 void
-units_window_show(UnitClass c)
+units_window_show(int c)
 {
     GtkWidget *box, *bar, *btn, *hint;
 
@@ -342,6 +483,8 @@ units_window_show(UnitClass c)
                                      gtk_label_new(label));
             g_free(label);
         }
+        gtk_notebook_append_page(GTK_NOTEBOOK(uw.notebook), build_foreign(),
+                                 gtk_label_new("Foreign"));
         gtk_box_pack_start(GTK_BOX(box), uw.notebook, TRUE, TRUE, 0);
         bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
         uw.count = gtk_label_new("");

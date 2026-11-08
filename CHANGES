@@ -1,3 +1,27 @@
+GtkACE 0.3.0 (2026-11-07)
+
+  Intelligence on other countries:
+  - Output of your commands is read for sightings, as WinACE does:
+    lookout, llook, coastwatch, skywatch, sonar and spy reports (and
+    anything else printing the same lines).  Sectors and units seen are
+    kept in the game database with the time and the command that saw
+    them.
+  - Other countries' sectors are drawn in their player colours.  Their
+    ships, land units and planes use WinACE's icons: red for countries
+    you are at war with or hostile to, green for friendly or allied,
+    blue for neutral, and grey for sightings more than a day old.
+  - The sector panel shows what was seen of a foreign sector (owner,
+    efficiency, people, stocks, roads, defence) and when, and lists
+    foreign units seen there.
+  - Units window has a Foreign tab (Ctrl+5) listing every sighting.
+  - Reports -> Intelligence menu: lookout, land lookout, radar, land
+    radar, sonar, coastwatch, skywatch, spy.
+  - File -> Clear Intelligence forgets all sightings.
+  - Relations are read from the server, and re-read after declare.
+  Fixes:
+  - Server tables with array fields (such as relations) are now stored
+    correctly: one column per element.
+
 GtkACE 0.2.0 (2026-11-07)
 
   Units:

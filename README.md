@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.2.0):
+Working now (0.3.0):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,
@@ -39,15 +39,22 @@ Working now (0.2.0):
   Double-click a unit to find it on the map.
 * After commands that change sectors or units (move, navigate, build,
   designate, load, fly ...) the map is re-read automatically.
+* Intelligence: lookout, land lookout, coastwatch, skywatch, sonar and spy
+  output is recorded.  Other countries' sectors appear in their colours,
+  their units with WinACE's red (enemy), green (allied), blue (neutral) and
+  grey (more than a day old) icons.  The sector panel shows what was seen
+  and when; the Units window's Foreign tab lists every sighting.
+  Reports -> Intelligence runs the reports; File -> Clear Intelligence
+  forgets them.
 * Offline mode: open a game's saved map without connecting
 * Report menus and toolbar (budget, census, nation, news, power, report,
   starvation, wire, relations, maps and more)
 
-Planned for later milestones: other countries' units and sectors seen in
-lookout, radar, coastwatch and spy reports; the report windows and the
-many command dialogs (move, navigate, attack, build, load ...); the
-telegram window; colour schemes; and WinACE's tools (production, build
-projection, famine relief, fortify, range table ...).
+Planned for later milestones: more intelligence sources (radar maps,
+recon and satellite pictures, attack and battle reports); the report
+windows and the many command dialogs (move, navigate, attack, build,
+load ...); the telegram window; colour schemes; and WinACE's tools
+(production, build projection, famine relief, fortify, range table ...).
 
 ## Building
 

@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=GtkACE
-GenericName=Empire Client
-Comment=Graphical client for the Wolfpack Empire war game
-Exec=gtkace
-Icon=applications-games
-Terminal=false
-Categories=Game;StrategyGame;

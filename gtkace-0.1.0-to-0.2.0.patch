@@ -1,0 +1,1525 @@
+diff -ruN gtkace-0.1.0/CHANGES gtkace-0.2.0/CHANGES
+--- gtkace-0.1.0/CHANGES	2026-11-07 21:05:56.209186780 -0800
++++ gtkace-0.2.0/CHANGES	2026-11-07 21:22:11.127706669 -0800
+@@ -1,3 +1,24 @@
++GtkACE 0.2.0 (2026-11-07)
++
++  Units:
++  - Ships, land units, planes and nukes are read from the server (xdump)
++    and drawn on the map with WinACE's unit icons; View menu switches
++    each kind on or off.
++  - New Units window (Units menu, Ctrl+1 to Ctrl+4): sortable lists of
++    ships, land units, planes and nukes with location, efficiency,
++    mobility, tech, cargo, fleet/army/wing and what each is loaded on.
++    Double-click a unit to find it on the map.
++  - The sector panel lists the units in the selected sector.
++  - Right-click menu lists the ships, land units or planes in a sector.
++  - Units menu also runs cargo, lcargo, sstat, lstat, pstat and show build.
++  - Refresh -> Update Units.
++  Other:
++  - After commands that change sectors or units (move, navigate, build,
++    designate, load, fly ...), GtkACE quietly re-reads sectors, units and
++    the bmap so the map stays current.
++  - Table descriptions are fetched once per login, so refreshes send
++    less traffic.
++
+ GtkACE 0.1.0 (2026-11-07)
+ 
+   First release: a port of WinACE 2.5.72 to C and GTK 3.
+diff -ruN gtkace-0.1.0/Makefile gtkace-0.2.0/Makefile
+--- gtkace-0.1.0/Makefile	2026-11-07 21:05:56.209126305 -0800
++++ gtkace-0.2.0/Makefile	2026-11-07 21:22:11.127697556 -0800
+@@ -25,7 +25,7 @@
+ 
+ ALL_CFLAGS = $(CFLAGS) $(WARNFLAGS) $(DEP_CFLAGS) -MMD -MP
+ 
+-OBJS = main.o mainwin.o games.o conn.o db.o world.o mapview.o
++OBJS = main.o mainwin.o games.o conn.o db.o world.o mapview.o units.o
+ 
+ all: gtkace
+ 
+diff -ruN gtkace-0.1.0/README.md gtkace-0.2.0/README.md
+--- gtkace-0.1.0/README.md	2026-11-07 21:05:56.208908170 -0800
++++ gtkace-0.2.0/README.md	2026-11-07 21:22:11.127098649 -0800
+@@ -10,7 +10,7 @@
+ 
+ ## Status
+ 
+-This is the first milestone (0.1.x).  Working now:
++Working now (0.2.0):
+ 
+ * Game list with the most recently played games first, and a login dialog
+   (host, port, country, password, user, kill hung session, UTF-8, deity,
+@@ -32,14 +32,22 @@
+   commodities, thresholds, distribution sector, resources); right-click for
+   census, commodity, resource, production, map and designate.  Drag or
+   scroll to move, Ctrl+scroll or +/- to zoom, arrow keys move the selection.
++* Your ships, land units, planes and nukes on the map with WinACE's unit
++  icons (each kind can be hidden from the View menu), listed in the sector
++  panel, and in the Units window (Ctrl+1 to Ctrl+4): sortable tables with
++  location, efficiency, mobility, tech, cargo and fleet/army/wing.
++  Double-click a unit to find it on the map.
++* After commands that change sectors or units (move, navigate, build,
++  designate, load, fly ...) the map is re-read automatically.
+ * Offline mode: open a game's saved map without connecting
+ * Report menus and toolbar (budget, census, nation, news, power, report,
+   starvation, wire, relations, maps and more)
+ 
+-Planned for later milestones: ships, planes and land units on the map,
+-the report windows and the many command dialogs (move, navigate, attack,
+-build, load ...), telegram window, colour schemes, and WinACE's tools
+-(production, build projection, famine relief, fortify, range table ...).
++Planned for later milestones: other countries' units and sectors seen in
++lookout, radar, coastwatch and spy reports; the report windows and the
++many command dialogs (move, navigate, attack, build, load ...); the
++telegram window; colour schemes; and WinACE's tools (production, build
++projection, famine relief, fortify, range table ...).
+ 
+ ## Building
+ 
+@@ -78,6 +86,9 @@
+ Daniel R. Kiracofe and later maintainers.  Released under the Artistic
+ License (see `LICENSE`).
+ 
++The unit icons in `icons.h` are WinACE's own pictures (ship.gif and so on),
++converted to pixel data.
++
+ GtkACE (2026) is a rewrite of WinACE in C for GTK 3.  Every source file is
+ new; each one names the WinACE modules it was ported from.  As the Artistic
+ License asks of modified versions, GtkACE has a different name, its
+diff -ruN gtkace-0.1.0/conn.c gtkace-0.2.0/conn.c
+--- gtkace-0.1.0/conn.c	2026-11-07 21:05:56.209015703 -0800
++++ gtkace-0.2.0/conn.c	2026-11-07 21:22:11.127178958 -0800
+@@ -483,6 +483,8 @@
+     if (c) {
+         if (c->done)
+             c->done(c->data);
++        if (c->flags & CMD_USER)
++            refresh_after_command(c->text);
+         cmd_free(c);
+     }
+ }
+diff -ruN gtkace-0.1.0/db.c gtkace-0.2.0/db.c
+--- gtkace-0.1.0/db.c	2026-11-07 21:05:56.209033166 -0800
++++ gtkace-0.2.0/db.c	2026-11-07 21:22:11.127314233 -0800
+@@ -407,13 +407,50 @@
+     f->in_dump = FALSE;
+ }
+ 
++/* Tables whose description was fetched in this login session; a
++ * server's tables cannot change while it runs. */
++static GHashTable *meta_known;
++
++void
++db_new_session(void)
++{
++    if (meta_known)
++        g_hash_table_remove_all(meta_known);
++}
++
++static gboolean
++load_stored_meta(Fetch *f)
++{
++    sqlite3_stmt *st;
++
++    if (!db || !meta_known || !g_hash_table_contains(meta_known, f->table)
++        || !db_table_exists(f->table))
++        return FALSE;
++    if (sqlite3_prepare_v2(db, "SELECT name FROM xmeta WHERE tbl=? ORDER BY idx",
++                           -1, &st, NULL) != SQLITE_OK)
++        return FALSE;
++    sqlite3_bind_text(st, 1, f->table, -1, SQLITE_TRANSIENT);
++    while (sqlite3_step(st) == SQLITE_ROW) {
++        GPtrArray *m = g_ptr_array_new_with_free_func(g_free);
++
++        g_ptr_array_add(m, g_strdup((const char *)sqlite3_column_text(st, 0)));
++        g_ptr_array_add(f->meta, m);
++    }
++    sqlite3_finalize(st);
++    return f->meta->len > 0;
++}
++
+ static void
+ fetch_rows_done(gpointer data)
+ {
+     Fetch *f = data;
+ 
+-    if (db && f->meta_ok && f->rows_ok)
+-        store_table(f);
++    if (db && f->meta_ok && f->rows_ok && store_table(f)) {
++        if (!meta_known)
++            meta_known = g_hash_table_new_full(g_str_hash, g_str_equal,
++                                               g_free, NULL);
++        g_hash_table_add(meta_known, g_strdup(f->table));
++    }
+     if (f->done)
+         f->done(f->data);
+     fetch_free(f);
+@@ -442,10 +479,16 @@
+         fetch_meta_only_done(f);
+         return;
+     }
+-    /* Both commands are queued now, so they run back to back */
+-    cmd = g_strdup_printf("xdump meta %s", table);
+-    conn_command(cmd, 0, fetch_line, fetch_meta_done, f);
+-    g_free(cmd);
++    if (load_stored_meta(f)) {
++        f->meta_ok = TRUE;
++        f->cur = f->rows;
++    } else {
++        g_ptr_array_set_size(f->meta, 0);
++        /* Both commands are queued now, so they run back to back */
++        cmd = g_strdup_printf("xdump meta %s", table);
++        conn_command(cmd, 0, fetch_line, fetch_meta_done, f);
++        g_free(cmd);
++    }
+     cmd = g_strdup_printf("xdump %s *", table);
+     conn_command(cmd, 0, fetch_line, fetch_rows_done, f);
+     g_free(cmd);
+diff -ruN gtkace-0.1.0/gtkace.h gtkace-0.2.0/gtkace.h
+--- gtkace-0.1.0/gtkace.h	2026-11-07 21:05:56.209002371 -0800
++++ gtkace-0.2.0/gtkace.h	2026-11-07 21:22:11.127372804 -0800
+@@ -99,13 +99,25 @@
+ 
+ /* -------------------------------------------------------------- world */
+ 
++/* Unit classes, in the order WinACE draws them */
++typedef enum { UC_SHIP, UC_LAND, UC_PLANE, UC_NUKE, UC_COUNT } UnitClass;
++
+ typedef struct {
+     char  des;           /* designation mnemonic, 0 = never seen */
+     char  newdes;        /* designation being built, 0 = none */
+     short own;           /* owner country number, -1 = unknown */
+     guchar eff;
++    guchar units[UC_COUNT];   /* our units here, saturating at 255 */
+ } Sector;
+ 
++typedef struct {
++    UnitClass cls;
++    int uid, owner, x, y, type, eff, mob, tech;
++    char group;          /* fleet, army or wing letter, 0 = none */
++    int carrier;         /* unit carrying it, -1 = none */
++    char carrier_cls;    /* 's'hip, 'l'and unit or 'p'lane */
++} Unit;
++
+ extern int world_x, world_y;    /* world size, 0 = unknown */
+ extern int my_cnum;             /* our country number, -1 = unknown */
+ 
+@@ -116,6 +128,13 @@
+ const char *world_country_name(int cnum); /* "" if unknown */
+ const char *world_des_name(char mnem);    /* "" if unknown */
+ int        world_sector_count(void);      /* sectors we own */
++const char *world_unit_table(UnitClass c);  /* "ship", "land", ... */
++const char *world_unit_noun(UnitClass c, gboolean plural);
++/* our units, in uid order; the array is owned by world.c */
++GPtrArray  *world_units(UnitClass c);
++const char *world_unit_mnem(UnitClass c, int type);   /* "dd" */
++const char *world_unit_type_name(UnitClass c, int type); /* "destroyer" */
++char       *world_unit_describe(const Unit *u);       /* newly allocated */
+ 
+ /* --------------------------------------------------------------- map */
+ 
+@@ -126,6 +145,15 @@
+ void       mapview_select(int x, int y);
+ gboolean   mapview_selected(int *x, int *y);
+ 
++/* ------------------------------------------------------ units window */
++
++void       units_window_show(UnitClass c);
++void       units_window_refresh(void);   /* data changed */
++
++/* --------------------------------------------------------- view options */
++
++extern gboolean show_units[UC_COUNT];   /* View menu toggles */
++
+ /* ------------------------------------------------------- main window */
+ 
+ GtkWidget *mainwin_new(GtkApplication *app);
+@@ -151,6 +179,9 @@
+ void       refresh_all(void);
+ void       refresh_sectors(void);
+ void       refresh_bmap(void);
++void       refresh_units(void);
++void       refresh_after_command(const char *cmd); /* if it changed things */
++void       db_new_session(void);          /* forget per-login caches */
+ 
+ /* Convert server text to valid UTF-8, marking highlighted runs.
+  * Returns the text; *hl gets a newly allocated array of byte offsets
+diff -ruN gtkace-0.1.0/icons.h gtkace-0.2.0/icons.h
+--- gtkace-0.1.0/icons.h	1969-12-31 16:00:00.000000000 -0800
++++ gtkace-0.2.0/icons.h	2026-11-07 21:22:11.127143726 -0800
+@@ -0,0 +1,233 @@
++/* Unit icons from WinACE 2.5.72 (ship.gif etc.), 13x11 pixels,
++ * as cairo ARGB32.  Generated from the GIF files; do not edit. */
++#ifndef GTKACE_ICONS_H
++#define GTKACE_ICONS_H
++
++#define ICON_W 13
++#define ICON_H 11
++
++static const guint32 icon_ship[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff000000,
++    0xff000000, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff000000, 0xff000000, 0xff000000, 0xff00ffff, 0xff66ffff, 0xff00ffff, 0xff00ffff, 0xff000000,
++    0xff000000, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff66ffff, 0xff000000, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff000000,
++    0xff000000, 0xff00ffff, 0xff00ffff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff00ffff, 0xff00ffff, 0xff000000,
++    0xff000000, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff000000, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff000000,
++    0xff000000, 0xff00ffff, 0xff66ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff000000, 0xff66ffff, 0xff00ffff, 0xff66ffff, 0xff00ffff, 0xff00ffff, 0xff000000,
++    0xff000000, 0xff00ffff, 0xff000000, 0xff00ffff, 0xff00ffff, 0xff000000, 0xff00ffff, 0xff000000, 0xff00ffff, 0xff66ffff, 0xff000000, 0xff00ffff, 0xff000000,
++    0xff000000, 0xff66ffff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff00ffff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff00ffff, 0xff000000,
++    0xff000000, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff00ffff, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_eship[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000,
++    0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000, 0xff000000, 0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000,
++    0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000,
++    0xff000000, 0xffff0000, 0xffff0000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff0000, 0xffff0000, 0xff000000,
++    0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000,
++    0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000,
++    0xff000000, 0xffff0000, 0xff000000, 0xffff0000, 0xffff0000, 0xff000000, 0xffff0000, 0xff000000, 0xffff0000, 0xffff0000, 0xff000000, 0xffff0000, 0xff000000,
++    0xff000000, 0xffff0000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff0000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff0000, 0xff000000,
++    0xff000000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_fship[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000,
++    0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000, 0xff000000, 0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000,
++    0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000,
++    0xff000000, 0xff00ff00, 0xff00ff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff00ff00, 0xff00ff00, 0xff000000,
++    0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000,
++    0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000,
++    0xff000000, 0xff00ff00, 0xff000000, 0xff00ff00, 0xff00ff00, 0xff000000, 0xff00ff00, 0xff000000, 0xff00ff00, 0xff00ff00, 0xff000000, 0xff00ff00, 0xff000000,
++    0xff000000, 0xff00ff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff00ff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff00ff00, 0xff000000,
++    0xff000000, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff00ff00, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_nship[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000,
++    0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000, 0xff000000, 0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000,
++    0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000,
++    0xff000000, 0xff0000ff, 0xff0000ff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff0000ff, 0xff0000ff, 0xff000000,
++    0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000,
++    0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000,
++    0xff000000, 0xff0000ff, 0xff000000, 0xff0000ff, 0xff0000ff, 0xff000000, 0xff0000ff, 0xff000000, 0xff0000ff, 0xff0000ff, 0xff000000, 0xff0000ff, 0xff000000,
++    0xff000000, 0xff0000ff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff0000ff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff0000ff, 0xff000000,
++    0xff000000, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_xship[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000,
++    0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000, 0xff000000, 0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000,
++    0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000,
++    0xff000000, 0xffcccccc, 0xffcccccc, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffcccccc, 0xffcccccc, 0xff000000,
++    0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000,
++    0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000,
++    0xff000000, 0xffcccccc, 0xff000000, 0xffcccccc, 0xffcccccc, 0xff000000, 0xffcccccc, 0xff000000, 0xffcccccc, 0xffcccccc, 0xff000000, 0xffcccccc, 0xff000000,
++    0xff000000, 0xffcccccc, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffcccccc, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffcccccc, 0xff000000,
++    0xff000000, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xffcccccc, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_plane[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000,
++    0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000,
++    0xff000000, 0xffffff00, 0xffffff00, 0xff000000, 0xffffff00, 0xffffff00, 0xff000000, 0xffffff00, 0xffffff00, 0xff000000, 0xffffff00, 0xffffff00, 0xff000000,
++    0xff000000, 0xffffff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffffff00, 0xff000000,
++    0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000,
++    0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000,
++    0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000,
++    0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000,
++    0xff000000, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_eplane[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000,
++    0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000,
++    0xff000000, 0xffff6800, 0xffff6800, 0xff000000, 0xffff6800, 0xffff6800, 0xff000000, 0xffff6800, 0xffff6800, 0xff000000, 0xffff6800, 0xffff6800, 0xff000000,
++    0xff000000, 0xffff6800, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff6800, 0xff000000,
++    0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000,
++    0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000,
++    0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000,
++    0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000,
++    0xff000000, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xffff6800, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_fplane[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000,
++    0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000,
++    0xff000000, 0xff00ff68, 0xff00ff68, 0xff000000, 0xff00ff68, 0xff00ff68, 0xff000000, 0xff00ff68, 0xff00ff68, 0xff000000, 0xff00ff68, 0xff00ff68, 0xff000000,
++    0xff000000, 0xff00ff68, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff00ff68, 0xff000000,
++    0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000,
++    0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000,
++    0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000,
++    0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000,
++    0xff000000, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff00ff68, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_nplane[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000000,
++    0xff000000, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000000,
++    0xff000000, 0xff000068, 0xff000068, 0xffffffff, 0xff000068, 0xff000068, 0xffffffff, 0xff000068, 0xff000068, 0xffffffff, 0xff000068, 0xff000068, 0xff000000,
++    0xff000000, 0xff000068, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xff000068, 0xff000000,
++    0xff000000, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xffffffff, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000000,
++    0xff000000, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xffffffff, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000000,
++    0xff000000, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xffffffff, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000000,
++    0xff000000, 0xff000068, 0xff000068, 0xff000068, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xff000068, 0xff000068, 0xff000068, 0xff000000,
++    0xff000000, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000068, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_xplane[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff000000,
++    0xff000000, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff000000,
++    0xff000000, 0xff686868, 0xff686868, 0xffffffff, 0xff686868, 0xff686868, 0xffffffff, 0xff686868, 0xff686868, 0xffffffff, 0xff686868, 0xff686868, 0xff000000,
++    0xff000000, 0xff686868, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xff686868, 0xff000000,
++    0xff000000, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xffffffff, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff000000,
++    0xff000000, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xffffffff, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff000000,
++    0xff000000, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xffffffff, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff000000,
++    0xff000000, 0xff686868, 0xff686868, 0xff686868, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xff686868, 0xff686868, 0xff686868, 0xff000000,
++    0xff000000, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff686868, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_land[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff000000,
++    0xff000000, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xffffff00, 0xffffff00, 0xffffff00, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff000000,
++    0xff000000, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff006800, 0xff000000,
++    0xff000000, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xffffff00, 0xffffff00, 0xffffff00, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff000000,
++    0xff000000, 0xff006800, 0xff006800, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff006800, 0xff006800, 0xff000000,
++    0xff000000, 0xff006800, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff006800, 0xff000000,
++    0xff000000, 0xff006800, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff006800, 0xff000000,
++    0xff000000, 0xff006800, 0xff006800, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xff006800, 0xff006800, 0xff000000,
++    0xff000000, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff006800, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_eland[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xff000000,
++    0xff000000, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xff000000, 0xff000000, 0xff000000, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xff000000,
++    0xff000000, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff0068, 0xff000000,
++    0xff000000, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xff000000, 0xff000000, 0xff000000, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xff000000,
++    0xff000000, 0xffff0068, 0xffff0068, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff0068, 0xffff0068, 0xff000000,
++    0xff000000, 0xffff0068, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff0068, 0xff000000,
++    0xff000000, 0xffff0068, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff0068, 0xff000000,
++    0xff000000, 0xffff0068, 0xffff0068, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffff0068, 0xffff0068, 0xff000000,
++    0xff000000, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xffff0068, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_fland[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xff000000,
++    0xff000000, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xff000000, 0xff000000, 0xff000000, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xff000000,
++    0xff000000, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0ff00, 0xff000000,
++    0xff000000, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xff000000, 0xff000000, 0xff000000, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xff000000,
++    0xff000000, 0xffc0ff00, 0xffc0ff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0ff00, 0xffc0ff00, 0xff000000,
++    0xff000000, 0xffc0ff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0ff00, 0xff000000,
++    0xff000000, 0xffc0ff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0ff00, 0xff000000,
++    0xff000000, 0xffc0ff00, 0xffc0ff00, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0ff00, 0xffc0ff00, 0xff000000,
++    0xff000000, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xffc0ff00, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_nland[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff000000,
++    0xff000000, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff000000, 0xff000000, 0xff000000, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff000000,
++    0xff000000, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff0068ff, 0xff000000,
++    0xff000000, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff000000, 0xff000000, 0xff000000, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff000000,
++    0xff000000, 0xff0068ff, 0xff0068ff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff0068ff, 0xff0068ff, 0xff000000,
++    0xff000000, 0xff0068ff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff0068ff, 0xff000000,
++    0xff000000, 0xff0068ff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff0068ff, 0xff000000,
++    0xff000000, 0xff0068ff, 0xff0068ff, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff0068ff, 0xff0068ff, 0xff000000,
++    0xff000000, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff0068ff, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_xland[ICON_W * ICON_H] = {
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++    0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xff000000,
++    0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xff000000, 0xff000000, 0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xff000000,
++    0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0c0c0, 0xff000000,
++    0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xff000000, 0xff000000, 0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xff000000,
++    0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xff000000,
++    0xff000000, 0xffc0c0c0, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0c0c0, 0xff000000,
++    0xff000000, 0xffc0c0c0, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0c0c0, 0xff000000,
++    0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xff000000,
++    0xff000000, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xffc0c0c0, 0xff000000,
++    0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000, 0xff000000,
++};
++
++static const guint32 icon_nuke[ICON_W * ICON_H] = {
++    0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00,
++    0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00,
++    0xffffff00, 0xffffff00, 0xffff00ff, 0xffff00ff, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffff00ff, 0xffff00ff, 0xffffff00, 0xffffff00,
++    0xffffff00, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffffff00, 0xffffff00, 0xffffff00, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffffff00,
++    0xffffff00, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffffff00, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffffff00,
++    0xffffff00, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffffff00,
++    0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffff00ff, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00,
++    0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00,
++    0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00,
++    0xffffff00, 0xffffff00, 0xffffff00, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffff00ff, 0xffffff00, 0xffffff00, 0xffffff00,
++    0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00, 0xffffff00,
++};
++
++#endif
+diff -ruN gtkace-0.1.0/mainwin.c gtkace-0.2.0/mainwin.c
+--- gtkace-0.1.0/mainwin.c	2026-11-07 21:05:56.208948895 -0800
++++ gtkace-0.2.0/mainwin.c	2026-11-07 21:22:11.127328990 -0800
+@@ -17,7 +17,7 @@
+     GtkTextMark *end;
+     GtkWidget *entry, *entry_label;
+     GtkWidget *st_conn, *st_time, *st_mail, *st_busy, *st_hover;
+-    GtkWidget *panel_title, *panel_grid;
++    GtkWidget *panel_title, *panel_grid, *panel_units;
+     GHashTable *panel_vals;     /* field key -> GtkLabel */
+     GList *needs_conn;          /* widgets usable only when connected */
+     GtkWidget *connect_item;
+@@ -379,6 +379,16 @@
+                                 "title");
+     gtk_container_add(GTK_CONTAINER(box), mw.panel_title);
+ 
++    /* our units in the sector, filled in by panel_show_sector */
++    mw.panel_units = gtk_label_new("");
++    gtk_label_set_xalign(GTK_LABEL(mw.panel_units), 0);
++    gtk_label_set_line_wrap(GTK_LABEL(mw.panel_units), TRUE);
++    gtk_label_set_selectable(GTK_LABEL(mw.panel_units), TRUE);
++    gtk_widget_set_can_focus(mw.panel_units, FALSE);
++    gtk_style_context_add_class(gtk_widget_get_style_context(mw.panel_units),
++                                "units");
++    gtk_container_add(GTK_CONTAINER(box), mw.panel_units);
++
+     g = mw.panel_grid = gtk_grid_new();
+     gtk_grid_set_column_spacing(GTK_GRID(g), 10);
+     gtk_grid_set_row_spacing(GTK_GRID(g), 1);
+@@ -507,6 +517,42 @@
+         sqlite3_finalize(st);
+     }
+     gtk_label_set_text(GTK_LABEL(mw.panel_title), title->str);
++
++    /* our units in this sector */
++    {
++        GString *u = g_string_new(NULL);
++        int shown = 0, total = 0;
++
++        for (int c = 0; c < UC_COUNT; c++) {
++            GPtrArray *a = world_units(c);
++
++            for (guint i = 0; i < a->len; i++) {
++                Unit *un = g_ptr_array_index(a, i);
++                char *d;
++
++                if (un->x != x || un->y != y)
++                    continue;
++                total++;
++                if (shown >= 30)
++                    continue;
++                d = world_unit_describe(un);
++                g_string_append_printf(u, "%s%s", u->len ? "\n" : "", d);
++                g_free(d);
++                shown++;
++            }
++        }
++        if (total > shown)
++            g_string_append_printf(u, "\n... and %d more", total - shown);
++        if (total) {
++            char *head = g_strdup_printf("Units here (%d):\n", total);
++
++            g_string_prepend(u, head);
++            g_free(head);
++        }
++        gtk_label_set_text(GTK_LABEL(mw.panel_units), u->str);
++        gtk_widget_set_visible(mw.panel_units, total > 0);
++        g_string_free(u, TRUE);
++    }
+     gtk_widget_set_sensitive(mw.panel_grid, have);
+     g_string_free(title, TRUE);
+ }
+@@ -514,24 +560,49 @@
+ /* ------------------------------------------------------- refreshing */
+ 
+ static void
+-refresh_finished(gpointer data)
++redisplay(void)
+ {
+-    const char *what = data;
+     int x, y;
+ 
+-    mw.refreshing = FALSE;
+     world_load();
+     mapview_redraw();
+     if (mapview_selected(&x, &y))
+         panel_show_sector(x, y);
+-    if (conn_state() == CONN_PLAYING) {
+-        char *t = g_strdup_printf("%s updated: %d sectors owned.", what,
+-                                  world_sector_count());
+-        out_text(t, "notice");
+-        g_free(t);
++    units_window_refresh();
++}
++
++static void
++refresh_finished(gpointer data)
++{
++    const char *what = data;
++
++    mw.refreshing = FALSE;
++    redisplay();
++    if (conn_state() == CONN_PLAYING && what) {
++        GString *t = g_string_new(NULL);
++
++        g_string_printf(t, "%s updated: %d sectors", what,
++                        world_sector_count());
++        for (int c = 0; c < UC_COUNT; c++) {
++            int n = world_units(c)->len;
++
++            if (n)
++                g_string_append_printf(t, ", %d %s", n,
++                                       world_unit_noun(c, n != 1));
++        }
++        g_string_append_c(t, '.');
++        out_text(t->str, "notice");
++        g_string_free(t, TRUE);
+     }
+ }
+ 
++static void
++fetch_units(void)
++{
++    for (int c = 0; c < UC_COUNT; c++)
++        db_fetch_table(world_unit_table(c), NULL, NULL);
++}
++
+ void
+ refresh_all(void)
+ {
+@@ -541,13 +612,88 @@
+     out_text("Updating the database...", "notice");
+     db_fetch_table("version", NULL, NULL);
+     db_fetch_table("sect-chr", NULL, NULL);
++    db_fetch_table("ship-chr", NULL, NULL);
++    db_fetch_table("land-chr", NULL, NULL);
++    db_fetch_table("plane-chr", NULL, NULL);
++    db_fetch_table("nuke-chr", NULL, NULL);
+     db_fetch_table("nat", NULL, NULL);
+     db_fetch_table("country", NULL, NULL);
+     db_fetch_table("sect", NULL, NULL);
++    fetch_units();
+     db_fetch_bmap(refresh_finished, "Database");
+ }
+ 
+ void
++refresh_units(void)
++{
++    if (conn_state() != CONN_PLAYING)
++        return;
++    for (int c = 0; c < UC_COUNT; c++)
++        db_fetch_table(world_unit_table(c), c == UC_COUNT - 1
++                       ? refresh_finished : NULL, "Units");
++}
++
++/* --- refreshing after commands that change sectors or units --- */
++
++static const char *changing_cmds[] = {
++    /* sectors */
++    "move", "designate", "distribute", "threshold", "deliver", "explore",
++    "build", "demobilize", "enlist", "convert", "improve", "collect",
++    "wipe", "transport", "grind", "harvest", "start", "stop",
++    /* units */
++    "navigate", "march", "fly", "load", "unload", "lload", "lunload",
++    "tend", "ltend", "scrap", "scuttle", "upgrade", "fleetadd", "army",
++    "wing", "sail", "unsail", "follow", "retreat", "lretreat", "mission",
++    "arm", "disarm", "launch", "drop", "paradrop", "bomb", "recon",
++    "sweep", "name", "fuel", "morale", "supply", "harden", "fortify",
++    "assault", "attack", "board", "lmine", "mine", "torpedo", "fire",
++    "transport", "order", "qorder", "sorder",
++    /* deity */
++    "edit", "give", "setsector", "setresource", "swapsector",
++    NULL
++};
++
++static guint changed_timer;
++
++static gboolean
++changed_refresh(gpointer d)
++{
++    if (conn_state() != CONN_PLAYING) {
++        changed_timer = 0;
++        return G_SOURCE_REMOVE;
++    }
++    if (conn_busy() || conn_wants_input() || mw.refreshing)
++        return G_SOURCE_CONTINUE;       /* wait for a quiet moment */
++    changed_timer = 0;
++    db_fetch_table("sect", NULL, NULL);
++    fetch_units();
++    db_fetch_bmap(refresh_finished, NULL);
++    return G_SOURCE_REMOVE;
++}
++
++void
++refresh_after_command(const char *cmd)
++{
++    char word[32];
++    size_t len;
++
++    if (sscanf(cmd, " %31[a-zA-Z]", word) != 1)
++        return;
++    len = strlen(word);
++    for (char *p = word; *p; p++)
++        *p = g_ascii_tolower(*p);
++    for (int i = 0; changing_cmds[i]; i++) {
++        /* Empire accepts unique abbreviations */
++        if (len >= 2 && !strncmp(changing_cmds[i], word, len)) {
++            if (changed_timer)
++                g_source_remove(changed_timer);
++            changed_timer = g_timeout_add(1200, changed_refresh, NULL);
++            return;
++        }
++    }
++}
++
++void
+ refresh_sectors(void)
+ {
+     if (conn_state() != CONN_PLAYING)
+@@ -566,7 +712,7 @@
+ void
+ mainwin_data_changed(void)
+ {
+-    refresh_finished("Database");
++    redisplay();
+ }
+ 
+ /* ------------------------------------------------- game lifecycle */
+@@ -602,6 +748,7 @@
+     g_free(path);
+     db_set_setting("country", g->country);
+     world_load();
++    units_window_refresh();
+     mapview_center(0, 0);
+     mapview_select(0, 0);
+     set_title(!connect);
+@@ -616,6 +763,7 @@
+ mainwin_logged_in(void)
+ {
+     set_title(FALSE);
++    db_new_session();
+     gtk_widget_grab_focus(mw.entry);
+     if (mw.game->autoupdate || world_x <= 0)
+         refresh_all();
+@@ -758,6 +906,25 @@
+ }
+ 
+ static void
++act_refresh_units(GtkWidget *w, gpointer d)
++{
++    refresh_units();
++}
++
++static void
++act_units(GtkWidget *w, gpointer c)
++{
++    units_window_show(GPOINTER_TO_INT(c));
++}
++
++static void
++act_show_units(GtkCheckMenuItem *ck, gpointer c)
++{
++    show_units[GPOINTER_TO_INT(c)] = gtk_check_menu_item_get_active(ck);
++    mapview_redraw();
++}
++
++static void
+ act_refresh_nat(GtkWidget *w, gpointer d)
+ {
+     db_fetch_table("nat", refresh_finished, "Country list");
+@@ -884,6 +1051,18 @@
+              "Home");
+     add_item(m, "_Go to Sector...", G_CALLBACK(act_goto), NULL, FALSE,
+              "<Control>g");
++    add_sep(m);
++    for (int c = 0; c < UC_COUNT; c++) {
++        static const char *labels[UC_COUNT] = {
++            "Show _Ships", "Show _Land Units", "Show _Planes", "Show _Nukes"
++        };
++        GtkWidget *ck = gtk_check_menu_item_new_with_mnemonic(labels[c]);
++
++        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(ck), show_units[c]);
++        g_signal_connect(ck, "toggled", G_CALLBACK(act_show_units),
++                         GINT_TO_POINTER(c));
++        gtk_menu_shell_append(GTK_MENU_SHELL(m), ck);
++    }
+ 
+     m = add_menu(bar, "_Refresh");
+     add_item(m, "Update _All", G_CALLBACK(act_refresh_all), NULL, TRUE, "F5");
+@@ -892,9 +1071,31 @@
+              NULL);
+     add_item(m, "Update _Bmap", G_CALLBACK(act_refresh_bmap), NULL, TRUE,
+              NULL);
++    add_item(m, "Update _Units", G_CALLBACK(act_refresh_units), NULL, TRUE,
++             NULL);
+     add_item(m, "Update _Player List", G_CALLBACK(act_refresh_nat), NULL, TRUE,
+              NULL);
+ 
++    m = add_menu(bar, "_Units");
++    add_item(m, "_Ships", G_CALLBACK(act_units), GINT_TO_POINTER(UC_SHIP),
++             FALSE, "<Control>1");
++    add_item(m, "_Land Units", G_CALLBACK(act_units), GINT_TO_POINTER(UC_LAND),
++             FALSE, "<Control>2");
++    add_item(m, "_Planes", G_CALLBACK(act_units), GINT_TO_POINTER(UC_PLANE),
++             FALSE, "<Control>3");
++    add_item(m, "_Nukes", G_CALLBACK(act_units), GINT_TO_POINTER(UC_NUKE),
++             FALSE, "<Control>4");
++    add_sep(m);
++    add_cmd(m, "Ship _Cargo", "cargo *");
++    add_cmd(m, "Land Unit Car_go", "lcargo *");
++    add_cmd(m, "Ship S_tats", "sstat *");
++    add_cmd(m, "Land Unit St_ats", "lstat *");
++    add_cmd(m, "Plane Stat_s", "pstat *");
++    add_sep(m);
++    add_cmd(m, "Show Ship _Build Info", "show ship build");
++    add_cmd(m, "Show Land Unit Build _Info", "show land build");
++    add_cmd(m, "Show Plane Build In_fo", "show plane build");
++
+     m = add_menu(bar, "Re_ports");
+     add_cmd(m, "_Budget", "budget");
+     add_cmd(m, "_Census", "census *");
+@@ -1063,6 +1264,7 @@
+     "label.title { font-weight: bold; }\n"
+     "label.heading { font-weight: bold; }\n"
+     "label.value { font-family: Monospace; }\n"
++    "label.units { color: #1a4fb5; padding-bottom: 4px; }\n"
+     ".statusfield { padding: 1px 6px; }\n";
+ 
+ static GtkWidget *
+diff -ruN gtkace-0.1.0/mapview.c gtkace-0.2.0/mapview.c
+--- gtkace-0.1.0/mapview.c	2026-11-07 21:05:56.209063882 -0800
++++ gtkace-0.2.0/mapview.c	2026-11-07 21:22:11.127193642 -0800
+@@ -8,6 +8,56 @@
+ #include <math.h>
+ #include <string.h>
+ #include "gtkace.h"
++#include "icons.h"
++
++gboolean show_units[UC_COUNT] = { TRUE, TRUE, TRUE, TRUE };
++
++/* Our own units' icons, by class (WinACE ship.gif, land.gif, ...) */
++static cairo_surface_t *
++unit_icon(UnitClass c)
++{
++    static cairo_surface_t *surf[UC_COUNT];
++    static const guint32 *data[UC_COUNT] = {
++        icon_ship, icon_land, icon_plane, icon_nuke
++    };
++
++    if (!surf[c]) {
++        int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, ICON_W);
++        guchar *buf = g_malloc0(stride * ICON_H);
++
++        for (int y = 0; y < ICON_H; y++)
++            memcpy(buf + y * stride, data[c] + y * ICON_W, ICON_W * 4);
++        surf[c] = cairo_image_surface_create_for_data(buf, CAIRO_FORMAT_ARGB32,
++                                                      ICON_W, ICON_H, stride);
++    }
++    return surf[c];
++}
++
++/* Up to three icons per hex, placed as WinACE's DrawUnits does.
++ * Returns how many were drawn. */
++static int
++draw_unit_icons(cairo_t *cr, const Sector *sec, double px, double py, double s)
++{
++    static const double pos[3][2] = {
++        { -0.8, -0.5 }, { 0.0, -0.5 }, { -0.4, -0.8 }
++    };
++    double w = 0.8 * s, h = w * ICON_H / ICON_W;
++    int n = 0;
++
++    for (int c = 0; c < UC_COUNT && n < 3; c++) {
++        if (!sec->units[c] || !show_units[c])
++            continue;
++        cairo_save(cr);
++        cairo_translate(cr, px + pos[n][0] * s, py + pos[n][1] * s);
++        cairo_scale(cr, w / ICON_W, h / ICON_H);
++        cairo_set_source_surface(cr, unit_icon(c), 0, 0);
++        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
++        cairo_paint(cr);
++        cairo_restore(cr);
++        n++;
++    }
++    return n;
++}
+ 
+ #define SQRT3_2 0.8660254
+ #define MIN_SIDE 4.0
+@@ -192,7 +242,15 @@
+                 cairo_stroke(cr);
+                 cairo_set_line_width(cr, s > 10 ? 1.0 : 0.5);
+             }
+-            if (sec && sec->des && sec->des != '.' && s >= 7) {
++            if (sec && s >= 10 && draw_unit_icons(cr, sec, px, py, s)) {
++                /* designation goes below the icons, smaller */
++                if (sec->des && sec->des != '.') {
++                    char t[2] = { sec->des, 0 };
++
++                    cairo_set_source_rgb(cr, text.r, text.g, text.b);
++                    draw_text(cr, small, t, px, py + s * 0.45);
++                }
++            } else if (sec && sec->des && sec->des != '.' && s >= 7) {
+                 char t[2] = { sec->des, 0 };
+ 
+                 cairo_set_source_rgb(cr, text.r, text.g, text.b);
+@@ -387,6 +445,28 @@
+     menu_item(menu, "_Map around here", G_CALLBACK(run_menu_cmd),
+               "map %d,%d", TRUE);
+     menu_item(menu, "_Designate...", G_CALLBACK(designate), NULL, TRUE);
++    {
++        static const char *unit_cmds[UC_COUNT][2] = {
++            { "List S_hips Here", "ship %d,%d" },
++            { "List _Land Units Here", "land %d,%d" },
++            { "List Pla_nes Here", "plane %d,%d" },
++            { "List N_ukes Here", "nuke %d,%d" },
++        };
++        Sector *sec = world_sector(mv.sel_x, mv.sel_y);
++        gboolean sep = FALSE;
++
++        for (int c = 0; c < UC_COUNT; c++) {
++            if (!sec || !sec->units[c])
++                continue;
++            if (!sep) {
++                gtk_menu_shell_append(GTK_MENU_SHELL(menu),
++                                      gtk_separator_menu_item_new());
++                sep = TRUE;
++            }
++            menu_item(menu, unit_cmds[c][0], G_CALLBACK(run_menu_cmd),
++                      (gpointer)unit_cmds[c][1], TRUE);
++        }
++    }
+     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
+     menu_item(menu, "Cen_ter Map Here", G_CALLBACK(center_here), NULL, FALSE);
+     gtk_widget_show_all(menu);
+diff -ruN gtkace-0.1.0/units.c gtkace-0.2.0/units.c
+--- gtkace-0.1.0/units.c	1969-12-31 16:00:00.000000000 -0800
++++ gtkace-0.2.0/units.c	2026-11-07 21:22:11.127349294 -0800
+@@ -0,0 +1,365 @@
++/*
++ * units.c - lists of our ships, land units, planes and nukes
++ * (WinACE frmUnits).  Double-click a unit to show it on the map.
++ */
++#include <string.h>
++#include <sqlite3.h>
++#include "gtkace.h"
++
++typedef enum { K_INT, K_PCT, K_TYPE, K_XY, K_TEXT, K_CARRIER } Kind;
++
++typedef struct {
++    const char *col;            /* xdump column */
++    const char *title;
++    Kind kind;
++} ColSpec;
++
++#define END { NULL, NULL, 0 }
++
++static const ColSpec ship_cols[] = {
++    { "uid", "#", K_INT }, { "type", "Type", K_TYPE }, { "xloc", "x,y", K_XY },
++    { "fleet", "Flt", K_TEXT }, { "effic", "Eff", K_PCT },
++    { "mobil", "Mob", K_INT }, { "tech", "Tech", K_INT },
++    { "civil", "Civ", K_INT }, { "milit", "Mil", K_INT },
++    { "uw", "Uw", K_INT }, { "food", "Food", K_INT },
++    { "shell", "Sh", K_INT }, { "gun", "Gun", K_INT },
++    { "petrol", "Pet", K_INT }, { "oil", "Oil", K_INT },
++    { "lcm", "Lcm", K_INT }, { "hcm", "Hcm", K_INT },
++    { "name", "Name", K_TEXT }, END
++};
++static const ColSpec land_cols[] = {
++    { "uid", "#", K_INT }, { "type", "Type", K_TYPE }, { "xloc", "x,y", K_XY },
++    { "army", "Army", K_TEXT }, { "effic", "Eff", K_PCT },
++    { "mobil", "Mob", K_INT }, { "tech", "Tech", K_INT },
++    { "milit", "Mil", K_INT }, { "food", "Food", K_INT },
++    { "shell", "Sh", K_INT }, { "gun", "Gun", K_INT },
++    { "petrol", "Pet", K_INT }, { "retreat", "Retreat", K_PCT },
++    { "ship", "On", K_CARRIER }, END
++};
++static const ColSpec plane_cols[] = {
++    { "uid", "#", K_INT }, { "type", "Type", K_TYPE }, { "xloc", "x,y", K_XY },
++    { "wing", "Wing", K_TEXT }, { "effic", "Eff", K_PCT },
++    { "mobil", "Mob", K_INT }, { "tech", "Tech", K_INT },
++    { "range", "Range", K_INT }, { "harden", "Hard", K_INT },
++    { "ship", "On", K_CARRIER }, END
++};
++static const ColSpec nuke_cols[] = {
++    { "uid", "#", K_INT }, { "type", "Type", K_TYPE }, { "xloc", "x,y", K_XY },
++    { "effic", "Eff", K_PCT }, { "tech", "Tech", K_INT },
++    { "plane", "On", K_CARRIER }, END
++};
++static const ColSpec *specs[UC_COUNT] = {
++    ship_cols, land_cols, plane_cols, nuke_cols
++};
++
++#define MAX_COLS 24
++
++typedef struct {
++    GtkWidget *view;
++    GtkListStore *store;
++    int ncols;                  /* visible columns */
++    int col_x, col_y;           /* hidden model columns with the location */
++    const ColSpec *cols[MAX_COLS];
++} Tab;
++
++static struct {
++    GtkWidget *win, *notebook, *count;
++    Tab tabs[UC_COUNT];
++} uw;
++
++static int
++col_index(sqlite3_stmt *st, const char *name)
++{
++    int n = sqlite3_column_count(st);
++
++    for (int i = 0; i < n; i++)
++        if (!strcmp(sqlite3_column_name(st, i), name))
++            return i;
++    return -1;
++}
++
++/* Text for the "On" column: what the unit is loaded on */
++static char *
++carrier_text(UnitClass c, sqlite3_stmt *st)
++{
++    int i;
++
++    if (c == UC_NUKE) {
++        i = col_index(st, "plane");
++        if (i >= 0 && sqlite3_column_int(st, i) >= 0
++            && sqlite3_column_type(st, i) != SQLITE_NULL)
++            return g_strdup_printf("plane %d", sqlite3_column_int(st, i));
++        return g_strdup("");
++    }
++    i = col_index(st, "ship");
++    if (i >= 0 && sqlite3_column_type(st, i) != SQLITE_NULL
++        && sqlite3_column_int(st, i) >= 0)
++        return g_strdup_printf("ship %d", sqlite3_column_int(st, i));
++    i = col_index(st, "land");
++    if (i >= 0 && sqlite3_column_type(st, i) != SQLITE_NULL
++        && sqlite3_column_int(st, i) >= 0)
++        return g_strdup_printf("land %d", sqlite3_column_int(st, i));
++    return g_strdup("");
++}
++
++static void
++fill_tab(UnitClass c)
++{
++    Tab *t = &uw.tabs[c];
++    sqlite3_stmt *st;
++    char *sql;
++    int idx[MAX_COLS], ix, iy, rows = 0;
++
++    gtk_list_store_clear(t->store);
++    if (!db_is_open() || !db_table_exists(world_unit_table(c)))
++        return;
++    sql = g_strdup_printf("SELECT * FROM \"%s\" ORDER BY uid",
++                          world_unit_table(c));
++    if (sqlite3_prepare_v2(db_handle(), sql, -1, &st, NULL) != SQLITE_OK) {
++        g_free(sql);
++        return;
++    }
++    g_free(sql);
++    for (int i = 0; i < t->ncols; i++)
++        idx[i] = col_index(st, t->cols[i]->col);
++    ix = col_index(st, "xloc");
++    iy = col_index(st, "yloc");
++    while (sqlite3_step(st) == SQLITE_ROW) {
++        GtkTreeIter it;
++        int x = ix >= 0 ? sqlite3_column_int(st, ix) : 0;
++        int y = iy >= 0 ? sqlite3_column_int(st, iy) : 0;
++
++        gtk_list_store_append(t->store, &it);
++        gtk_list_store_set(t->store, &it, t->col_x, x, t->col_y, y, -1);
++        for (int i = 0; i < t->ncols; i++) {
++            const ColSpec *cs = t->cols[i];
++            int v = idx[i] >= 0 ? sqlite3_column_int(st, idx[i]) : 0;
++            const char *txt = idx[i] >= 0
++                ? (const char *)sqlite3_column_text(st, idx[i]) : NULL;
++            char *s = NULL;
++
++            switch (cs->kind) {
++            case K_INT:
++            case K_PCT:
++                gtk_list_store_set(t->store, &it, i, v, -1);
++                continue;
++            case K_TYPE:
++                s = g_strdup_printf("%-4s %s", world_unit_mnem(c, v),
++                                    world_unit_type_name(c, v));
++                break;
++            case K_XY:
++                s = g_strdup_printf("%d,%d", x, y);
++                break;
++            case K_CARRIER:
++                s = carrier_text(c, st);
++                break;
++            case K_TEXT:
++                s = g_strdup(txt && strcmp(txt, "~") ? txt : "");
++                break;
++            }
++            gtk_list_store_set(t->store, &it, i, s, -1);
++            g_free(s);
++        }
++        rows++;
++    }
++    sqlite3_finalize(st);
++}
++
++static void
++update_count(void)
++{
++    int c = gtk_notebook_get_current_page(GTK_NOTEBOOK(uw.notebook));
++    int n;
++    char *s;
++
++    if (c < 0 || c >= UC_COUNT)
++        return;
++    n = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(uw.tabs[c].store), NULL);
++    s = g_strdup_printf("%d %s", n, world_unit_noun(c, n != 1));
++    gtk_label_set_text(GTK_LABEL(uw.count), s);
++    g_free(s);
++}
++
++void
++units_window_refresh(void)
++{
++    if (!uw.win)
++        return;
++    for (int c = 0; c < UC_COUNT; c++)
++        fill_tab(c);
++    update_count();
++}
++
++static void
++row_activated(GtkTreeView *tv, GtkTreePath *path, GtkTreeViewColumn *col,
++              gpointer data)
++{
++    Tab *t = data;
++    GtkTreeModel *m = gtk_tree_view_get_model(tv);
++    GtkTreeIter it;
++    int x, y;
++
++    if (!gtk_tree_model_get_iter(m, &it, path))
++        return;
++    gtk_tree_model_get(m, &it, t->col_x, &x, t->col_y, &y, -1);
++    mapview_center(x, y);
++    mapview_select(x, y);
++    gtk_window_present(mainwin_window());
++}
++
++/* XY column sorts by y, then x, like Empire's own lists */
++static int
++sort_xy(GtkTreeModel *m, GtkTreeIter *a, GtkTreeIter *b, gpointer data)
++{
++    Tab *t = data;
++    int ax, ay, bx, by;
++
++    gtk_tree_model_get(m, a, t->col_x, &ax, t->col_y, &ay, -1);
++    gtk_tree_model_get(m, b, t->col_x, &bx, t->col_y, &by, -1);
++    return ay != by ? ay - by : ax - bx;
++}
++
++static void
++pct_cell(GtkTreeViewColumn *col, GtkCellRenderer *r, GtkTreeModel *m,
++         GtkTreeIter *it, gpointer data)
++{
++    int v;
++    char buf[16];
++
++    gtk_tree_model_get(m, it, GPOINTER_TO_INT(data), &v, -1);
++    snprintf(buf, sizeof(buf), "%d%%", v);
++    g_object_set(r, "text", buf, NULL);
++}
++
++static GtkWidget *
++build_tab(UnitClass c)
++{
++    Tab *t = &uw.tabs[c];
++    GType types[MAX_COLS + 2];
++    GtkWidget *sw;
++    int n = 0;
++
++    for (const ColSpec *cs = specs[c]; cs->col && n < MAX_COLS; cs++) {
++        t->cols[n] = cs;
++        types[n] = cs->kind == K_INT || cs->kind == K_PCT
++            ? G_TYPE_INT : G_TYPE_STRING;
++        n++;
++    }
++    t->ncols = n;
++    t->col_x = n;
++    t->col_y = n + 1;
++    types[n] = types[n + 1] = G_TYPE_INT;
++    t->store = gtk_list_store_newv(n + 2, types);
++    gtk_tree_sortable_set_sort_func(GTK_TREE_SORTABLE(t->store), t->col_x,
++                                    sort_xy, t, NULL);
++    t->view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(t->store));
++    gtk_tree_view_set_enable_search(GTK_TREE_VIEW(t->view), FALSE);
++    for (int i = 0; i < n; i++) {
++        GtkCellRenderer *r = gtk_cell_renderer_text_new();
++        GtkTreeViewColumn *col;
++        gboolean num = t->cols[i]->kind == K_INT || t->cols[i]->kind == K_PCT
++            || t->cols[i]->kind == K_XY;
++
++        g_object_set(r, "family", "Monospace", NULL);
++        if (num)
++            g_object_set(r, "xalign", 1.0, NULL);
++        if (t->cols[i]->kind == K_PCT) {
++            col = gtk_tree_view_column_new_with_attributes(t->cols[i]->title, r,
++                                                           NULL);
++            gtk_tree_view_column_set_cell_data_func(col, r, pct_cell,
++                                                    GINT_TO_POINTER(i), NULL);
++        } else {
++            col = gtk_tree_view_column_new_with_attributes(t->cols[i]->title, r,
++                                                           "text", i, NULL);
++        }
++        gtk_tree_view_column_set_sort_column_id(
++            col, t->cols[i]->kind == K_XY ? t->col_x : i);
++        gtk_tree_view_column_set_resizable(col, TRUE);
++        gtk_tree_view_append_column(GTK_TREE_VIEW(t->view), col);
++    }
++    g_signal_connect(t->view, "row-activated", G_CALLBACK(row_activated), t);
++    sw = gtk_scrolled_window_new(NULL, NULL);
++    gtk_container_add(GTK_CONTAINER(sw), t->view);
++    return sw;
++}
++
++static void
++refresh_clicked(GtkButton *b, gpointer d)
++{
++    refresh_units();
++}
++
++static void
++page_switched(GtkNotebook *nb, GtkWidget *page, guint num, gpointer d)
++{
++    /* the page index is not current yet during the signal */
++    int n = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(uw.tabs[num].store),
++                                           NULL);
++    char *s = g_strdup_printf("%d %s", n, world_unit_noun(num, n != 1));
++
++    gtk_label_set_text(GTK_LABEL(uw.count), s);
++    g_free(s);
++}
++
++static void
++destroyed(GtkWidget *w, gpointer d)
++{
++    memset(&uw, 0, sizeof(uw));
++}
++
++static gboolean
++key_press(GtkWidget *w, GdkEventKey *ev, gpointer d)
++{
++    if (ev->keyval == GDK_KEY_Escape) {
++        gtk_widget_destroy(w);
++        return TRUE;
++    }
++    return FALSE;
++}
++
++void
++units_window_show(UnitClass c)
++{
++    GtkWidget *box, *bar, *btn, *hint;
++
++    if (!uw.win) {
++        uw.win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
++        gtk_window_set_title(GTK_WINDOW(uw.win), "Units");
++        gtk_window_set_transient_for(GTK_WINDOW(uw.win), mainwin_window());
++        gtk_window_set_default_size(GTK_WINDOW(uw.win), 760, 380);
++        g_signal_connect(uw.win, "destroy", G_CALLBACK(destroyed), NULL);
++        g_signal_connect(uw.win, "key-press-event", G_CALLBACK(key_press),
++                         NULL);
++        box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
++        gtk_container_set_border_width(GTK_CONTAINER(box), 6);
++        gtk_container_add(GTK_CONTAINER(uw.win), box);
++        uw.notebook = gtk_notebook_new();
++        for (int i = 0; i < UC_COUNT; i++) {
++            char *label = g_strdup(world_unit_noun(i, TRUE));
++
++            label[0] = g_ascii_toupper(label[0]);
++            gtk_notebook_append_page(GTK_NOTEBOOK(uw.notebook), build_tab(i),
++                                     gtk_label_new(label));
++            g_free(label);
++        }
++        gtk_box_pack_start(GTK_BOX(box), uw.notebook, TRUE, TRUE, 0);
++        bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
++        uw.count = gtk_label_new("");
++        gtk_box_pack_start(GTK_BOX(bar), uw.count, FALSE, FALSE, 0);
++        hint = gtk_label_new("Double-click a unit to find it on the map.");
++        gtk_style_context_add_class(gtk_widget_get_style_context(hint),
++                                    "dim-label");
++        gtk_box_pack_start(GTK_BOX(bar), hint, TRUE, TRUE, 0);
++        btn = gtk_button_new_with_mnemonic("_Update from Server");
++        g_signal_connect(btn, "clicked", G_CALLBACK(refresh_clicked), NULL);
++        gtk_box_pack_end(GTK_BOX(bar), btn, FALSE, FALSE, 0);
++        gtk_box_pack_start(GTK_BOX(box), bar, FALSE, FALSE, 0);
++        g_signal_connect(uw.notebook, "switch-page", G_CALLBACK(page_switched),
++                         NULL);
++        units_window_refresh();
++        gtk_widget_show_all(uw.win);
++    }
++    gtk_notebook_set_current_page(GTK_NOTEBOOK(uw.notebook), c);
++    update_count();
++    gtk_window_present(GTK_WINDOW(uw.win));
++}
+diff -ruN gtkace-0.1.0/version.h gtkace-0.2.0/version.h
+--- gtkace-0.1.0/version.h	2026-11-07 21:05:56.209149878 -0800
++++ gtkace-0.2.0/version.h	2026-11-07 21:22:11.127132989 -0800
+@@ -2,6 +2,6 @@
+ #define GTKACE_VERSION_H
+ 
+ #define GTKACE_NAME    "GtkACE"
+-#define GTKACE_VERSION "0.1.0"
++#define GTKACE_VERSION "0.2.0"
+ 
+ #endif
+diff -ruN gtkace-0.1.0/world.c gtkace-0.2.0/world.c
+--- gtkace-0.1.0/world.c	2026-11-07 21:05:56.209048857 -0800
++++ gtkace-0.2.0/world.c	2026-11-07 21:22:11.127361315 -0800
+@@ -18,6 +18,205 @@
+ static char *des_names[128];    /* mnemonic -> name */
+ static int owned;
+ 
++static const char *unit_tables[UC_COUNT] = { "ship", "land", "plane", "nuke" };
++static const char *unit_nouns[UC_COUNT][2] = {
++    { "ship", "ships" }, { "land unit", "land units" },
++    { "plane", "planes" }, { "nuke", "nukes" }
++};
++static GPtrArray *units[UC_COUNT];      /* Unit * */
++static GHashTable *unit_mnem[UC_COUNT];  /* type -> "dd" */
++static GHashTable *unit_tname[UC_COUNT]; /* type -> "destroyer" */
++
++const char *
++world_unit_table(UnitClass c)
++{
++    return unit_tables[c];
++}
++
++const char *
++world_unit_noun(UnitClass c, gboolean plural)
++{
++    return unit_nouns[c][plural ? 1 : 0];
++}
++
++GPtrArray *
++world_units(UnitClass c)
++{
++    if (!units[c])
++        units[c] = g_ptr_array_new_with_free_func(g_free);
++    return units[c];
++}
++
++const char *
++world_unit_mnem(UnitClass c, int type)
++{
++    const char *s = unit_mnem[c]
++        ? g_hash_table_lookup(unit_mnem[c], GINT_TO_POINTER(type)) : NULL;
++
++    return s ? s : "?";
++}
++
++const char *
++world_unit_type_name(UnitClass c, int type)
++{
++    const char *s = unit_tname[c]
++        ? g_hash_table_lookup(unit_tname[c], GINT_TO_POINTER(type)) : NULL;
++
++    return s ? s : "";
++}
++
++char *
++world_unit_describe(const Unit *u)
++{
++    static const char *grp[UC_COUNT] = { "fleet", "army", "wing", "" };
++    GString *s = g_string_new(NULL);
++
++    g_string_printf(s, "%s #%d  %s %s  %d%%", world_unit_noun(u->cls, FALSE),
++                    u->uid, world_unit_mnem(u->cls, u->type),
++                    world_unit_type_name(u->cls, u->type), u->eff);
++    if (u->group)
++        g_string_append_printf(s, "  %s %c", grp[u->cls], u->group);
++    if (u->carrier >= 0)
++        g_string_append_printf(s, "  on %s #%d",
++                               u->carrier_cls == 's' ? "ship"
++                               : u->carrier_cls == 'p' ? "plane" : "land unit",
++                               u->carrier);
++    return g_string_free(s, FALSE);
++}
++
++static sqlite3_stmt *prepare(const char *sql);
++
++/* "dd   destroyer" -> mnemonic "dd", name "destroyer" */
++static void
++load_unit_types(UnitClass c)
++{
++    char *tbl = g_strdup_printf("%s-chr", unit_tables[c]);
++    char *sql;
++    sqlite3_stmt *st;
++
++    if (!unit_mnem[c]) {
++        unit_mnem[c] = g_hash_table_new_full(NULL, NULL, NULL, g_free);
++        unit_tname[c] = g_hash_table_new_full(NULL, NULL, NULL, g_free);
++    }
++    g_hash_table_remove_all(unit_mnem[c]);
++    g_hash_table_remove_all(unit_tname[c]);
++    if (!db_table_exists(tbl)) {
++        g_free(tbl);
++        return;
++    }
++    sql = g_strdup_printf("SELECT type, name FROM \"%s\"", tbl);
++    if ((st = prepare(sql))) {
++        while (sqlite3_step(st) == SQLITE_ROW) {
++            int type = sqlite3_column_int(st, 0);
++            const char *n = (const char *)sqlite3_column_text(st, 1);
++            const char *sp;
++
++            if (!n)
++                continue;
++            sp = strchr(n, ' ');
++            g_hash_table_insert(unit_mnem[c], GINT_TO_POINTER(type),
++                                sp ? g_strndup(n, sp - n) : g_strdup(n));
++            if (sp) {
++                while (*sp == ' ')
++                    sp++;
++                g_hash_table_insert(unit_tname[c], GINT_TO_POINTER(type),
++                                    g_strdup(sp));
++            }
++        }
++        sqlite3_finalize(st);
++    }
++    g_free(sql);
++    g_free(tbl);
++}
++
++/* Columns differ between classes and server versions: look them up */
++static int
++col_index(sqlite3_stmt *st, const char *name)
++{
++    int n = sqlite3_column_count(st);
++
++    for (int i = 0; i < n; i++)
++        if (!strcmp(sqlite3_column_name(st, i), name))
++            return i;
++    return -1;
++}
++
++static int
++col_int(sqlite3_stmt *st, int i, int dflt)
++{
++    return i < 0 || sqlite3_column_type(st, i) == SQLITE_NULL
++        ? dflt : sqlite3_column_int(st, i);
++}
++
++static void
++load_units(UnitClass c)
++{
++    static const char *grp_col[UC_COUNT] = { "fleet", "army", "wing", NULL };
++    GPtrArray *a = world_units(c);
++    sqlite3_stmt *st;
++    char *sql;
++
++    g_ptr_array_set_size(a, 0);
++    load_unit_types(c);
++    if (!db_table_exists(unit_tables[c]))
++        return;
++    sql = g_strdup_printf("SELECT * FROM \"%s\" ORDER BY uid", unit_tables[c]);
++    st = prepare(sql);
++    g_free(sql);
++    if (!st)
++        return;
++    {
++        int iuid = col_index(st, "uid"), iown = col_index(st, "owner");
++        int ix = col_index(st, "xloc"), iy = col_index(st, "yloc");
++        int itype = col_index(st, "type"), ieff = col_index(st, "effic");
++        int imob = col_index(st, "mobil"), itech = col_index(st, "tech");
++        int igrp = grp_col[c] ? col_index(st, grp_col[c]) : -1;
++        int iship = col_index(st, "ship"), iland = col_index(st, "land");
++        int iplane = col_index(st, "plane");
++
++        while (sqlite3_step(st) == SQLITE_ROW) {
++            Unit *u = g_new0(Unit, 1);
++            Sector *s;
++            const char *g;
++
++            u->cls = c;
++            u->uid = col_int(st, iuid, -1);
++            u->owner = col_int(st, iown, -1);
++            u->x = col_int(st, ix, 0);
++            u->y = col_int(st, iy, 0);
++            u->type = col_int(st, itype, -1);
++            u->eff = col_int(st, ieff, 0);
++            u->mob = col_int(st, imob, 0);
++            u->tech = col_int(st, itech, 0);
++            g = igrp >= 0 ? (const char *)sqlite3_column_text(st, igrp) : NULL;
++            u->group = g && g[0] && g[0] != ' ' && g[0] != '~' ? g[0] : 0;
++            u->carrier = -1;
++            if (c == UC_LAND || c == UC_PLANE) {
++                /* carried by a ship, or by a land unit */
++                if (col_int(st, iship, -1) >= 0) {
++                    u->carrier = col_int(st, iship, -1);
++                    u->carrier_cls = 's';
++                } else if (col_int(st, iland, -1) >= 0) {
++                    u->carrier = col_int(st, iland, -1);
++                    u->carrier_cls = 'l';
++                }
++            } else if (c == UC_NUKE && col_int(st, iplane, -1) >= 0) {
++                u->carrier = col_int(st, iplane, -1);
++                u->carrier_cls = 'p';
++            }
++            if (u->uid < 0 || u->type < 0) {
++                g_free(u);
++                continue;
++            }
++            g_ptr_array_add(a, u);
++            s = world_sector(u->x, u->y);
++            if (s && s->units[c] < 255)
++                s->units[c]++;
++        }
++        sqlite3_finalize(st);
++    }
++}
++
+ int
+ world_wrap_x(int x)
+ {
+@@ -99,6 +298,8 @@
+         countries = g_hash_table_new_full(NULL, NULL, NULL, g_free);
+     world_x = world_y = 0;
+     my_cnum = -1;
++    for (int c = 0; c < UC_COUNT; c++)
++        g_ptr_array_set_size(world_units(c), 0);
+     if (!db_is_open())
+         return;
+ 
+@@ -193,4 +394,7 @@
+         }
+         sqlite3_finalize(st);
+     }
++
++    for (int c = 0; c < UC_COUNT; c++)
++        load_units(c);
+ }

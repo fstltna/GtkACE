@@ -1,0 +1,31 @@
+GtkACE 0.2.0 (2026-11-07)
+
+  Units:
+  - Ships, land units, planes and nukes are read from the server (xdump)
+    and drawn on the map with WinACE's unit icons; View menu switches
+    each kind on or off.
+  - New Units window (Units menu, Ctrl+1 to Ctrl+4): sortable lists of
+    ships, land units, planes and nukes with location, efficiency,
+    mobility, tech, cargo, fleet/army/wing and what each is loaded on.
+    Double-click a unit to find it on the map.
+  - The sector panel lists the units in the selected sector.
+  - Right-click menu lists the ships, land units or planes in a sector.
+  - Units menu also runs cargo, lcargo, sstat, lstat, pstat and show build.
+  - Refresh -> Update Units.
+  Other:
+  - After commands that change sectors or units (move, navigate, build,
+    designate, load, fly ...), GtkACE quietly re-reads sectors, units and
+    the bmap so the map stays current.
+  - Table descriptions are fetched once per login, so refreshes send
+    less traffic.
+
+GtkACE 0.1.0 (2026-11-07)
+
+  First release: a port of WinACE 2.5.72 to C and GTK 3.
+  - Game list and login dialog; async connect and Empire login.
+  - Command line with history, server questions, Escape to abort.
+  - Telegram/announcement notices and AutoRead.
+  - SQLite database built from xdump; bmap parsing.
+  - Hex map with sector details panel and right-click commands.
+  - Offline mode; report menus and toolbar.
+  Tested against Wolfpack Empire 4.4.0.

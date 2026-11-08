@@ -1073,6 +1073,29 @@ act_dlg(GtkWidget *w, gpointer which)
 }
 
 static void
+act_telegrams(GtkWidget *w, gpointer d)
+{
+    tele_window_show();
+}
+
+/* the toolbar button also fetches anything new */
+static void
+act_telegrams_check(GtkWidget *w, gpointer d)
+{
+    tele_window_show();
+    if (conn_state() == CONN_PLAYING)
+        tele_check();
+}
+
+static gboolean
+mail_clicked(GtkWidget *w, GdkEventButton *ev, gpointer d)
+{
+    if (ev->button == 1)
+        act_telegrams_check(NULL, NULL);
+    return TRUE;
+}
+
+static void
 act_clear_intel(GtkWidget *w, gpointer d)
 {
     GtkWidget *m;
@@ -1310,7 +1333,9 @@ build_menus(void)
     add_cmd(m, "W_ire", "wire");
 
     m = add_menu(bar, "_Diplomacy");
-    add_cmd(m, "_Read Telegrams", "read");
+    add_item(m, "_Telegrams...", G_CALLBACK(act_telegrams), NULL, FALSE,
+             "<Control>t");
+    add_cmd(m, "_Read Telegrams in Output", "read");
     add_cmd(m, "R_elations", "relations");
     add_cmd(m, "_Countries", "country *");
 
@@ -1359,7 +1384,8 @@ build_toolbar(void)
                 "starvation *");
     tool_button(tb, "Wire", "Read today's wires", G_CALLBACK(act_cmd), "wire");
     gtk_toolbar_insert(GTK_TOOLBAR(tb), gtk_separator_tool_item_new(), -1);
-    tool_button(tb, "Read", "Read telegrams", G_CALLBACK(act_cmd), "read");
+    tool_button(tb, "Telegrams", "Read and write telegrams",
+                G_CALLBACK(act_telegrams_check), NULL);
     tool_button(tb, "Relations", "Check relations", G_CALLBACK(act_cmd),
                 "relations");
     return tb;
@@ -1566,6 +1592,24 @@ mainwin_new(GtkApplication *app)
     mw.st_conn = status_field(status, FALSE);
     mw.st_time = status_field(status, FALSE);
     mw.st_mail = status_field(status, FALSE);
+    {
+        /* clicking the mail notice opens the telegrams */
+        GtkWidget *ev = gtk_event_box_new();
+        GtkWidget *parent = gtk_widget_get_parent(mw.st_mail);
+        int pos;
+
+        gtk_container_child_get(GTK_CONTAINER(parent), mw.st_mail, "position",
+                                &pos, NULL);
+        g_object_ref(mw.st_mail);
+        gtk_container_remove(GTK_CONTAINER(parent), mw.st_mail);
+        gtk_container_add(GTK_CONTAINER(ev), mw.st_mail);
+        g_object_unref(mw.st_mail);
+        gtk_box_pack_start(GTK_BOX(parent), ev, FALSE, FALSE, 0);
+        gtk_box_reorder_child(GTK_BOX(parent), ev, pos);
+        gtk_widget_set_tooltip_text(ev, "Click to open the telegrams");
+        g_signal_connect(ev, "button-press-event", G_CALLBACK(mail_clicked),
+                         NULL);
+    }
     mw.st_busy = status_field(status, FALSE);
     mw.st_hover = status_field(status, TRUE);
     gtk_box_pack_start(GTK_BOX(vbox), gtk_separator_new(

@@ -26,6 +26,7 @@ typedef struct {
     CmdLineFunc line;
     CmdDoneFunc done;
     gpointer data;
+    GQueue answers;             /* char *: replies to the server's prompts */
 } EmpCmd;
 
 static struct {
@@ -84,6 +85,7 @@ static void
 cmd_free(EmpCmd *c)
 {
     if (c) {
+        g_queue_clear_full(&c->answers, g_free);
         g_free(c->text);
         g_free(c);
     }
@@ -180,6 +182,7 @@ conn_close(const char *why)
     status_set_question(NULL);
     set_state(CONN_DOWN, why);
     intel_command_end();
+    tele_command_end();
     flush_queue();
     status_set_busy(0);
     if (why && *why)
@@ -469,8 +472,10 @@ send_next(void)
     cs.prompted = FALSE;
     if (is_read_cmd(c->text))
         status_set_mail(NULL);
-    if (c->flags & CMD_SHOW)
+    if (c->flags & CMD_SHOW) {
         intel_command_start(c->text);
+        tele_command_start(c->text);
+    }
     if (c->flags & CMD_SHOW)
         out_prompt(c->text);
     send_line(c->text);
@@ -484,8 +489,10 @@ command_finished(void)
 
     cs.current = NULL;
     if (c) {
-        if (c->flags & CMD_SHOW)
+        if (c->flags & CMD_SHOW) {
             intel_command_end();
+            tele_command_end();
+        }
         if (c->done)
             c->done(c->data);
         if (c->flags & CMD_USER)
@@ -523,11 +530,11 @@ handle_inform(const char *text)
     if (cs.game->autoread && tele) {
         /* don't pile up reads */
         for (GList *l = cs.queue.head; l; l = l->next)
-            if (!strcmp(((EmpCmd *)l->data)->text, "read"))
+            if (is_read_cmd(((EmpCmd *)l->data)->text))
                 return;
-        if (cs.current && !strcmp(cs.current->text, "read"))
+        if (cs.current && is_read_cmd(cs.current->text))
             return;
-        conn_command("read", CMD_SHOW, NULL, NULL, NULL);
+        tele_autoread();
     }
 }
 
@@ -552,6 +559,16 @@ play_line(int id, const char *text)
         return;
     }
     case C_FLUSH:
+        if (c && !g_queue_is_empty(&c->answers)) {
+            /* prepared replies, such as the lines of a telegram */
+            char *a = g_queue_pop_head(&c->answers);
+
+            if (c->flags & CMD_SHOW)
+                out_text(a, "answer");
+            send_line(a);
+            g_free(a);
+            return;
+        }
         if (c && (c->flags & CMD_STOP) && text[0] == '<') {
             /* the end of a navigate or march: stop there */
             out_text(text, "question");
@@ -601,6 +618,7 @@ play_line(int id, const char *text)
         char *plain = emp_text_decode(text, cs.utf8, NULL);
 
         intel_line(plain);
+        tele_line(plain);
         g_free(plain);
     }
     if (!c || (c->flags & CMD_SHOW))
@@ -636,9 +654,9 @@ process_line(const char *line)
 
 /* --------------------------------------------------------- commands */
 
-void
-conn_command(const char *cmd, guint flags, CmdLineFunc line, CmdDoneFunc done,
-             gpointer data)
+static void
+queue_command(const char *cmd, guint flags, CmdLineFunc line,
+              const char *const *answers, CmdDoneFunc done, gpointer data)
 {
     EmpCmd *c;
 
@@ -655,9 +673,25 @@ conn_command(const char *cmd, guint flags, CmdLineFunc line, CmdDoneFunc done,
     c->line = line;
     c->done = done;
     c->data = data;
+    for (int i = 0; answers && answers[i]; i++)
+        g_queue_push_tail(&c->answers, g_strdup(answers[i]));
     g_queue_push_tail(&cs.queue, c);
     status_set_busy(conn_queue_length());
     send_next();
+}
+
+void
+conn_command(const char *cmd, guint flags, CmdLineFunc line, CmdDoneFunc done,
+             gpointer data)
+{
+    queue_command(cmd, flags, line, NULL, done, data);
+}
+
+void
+conn_command_answers(const char *cmd, guint flags, const char *const *answers,
+                     CmdDoneFunc done, gpointer data)
+{
+    queue_command(cmd, flags, NULL, answers, done, data);
 }
 
 void

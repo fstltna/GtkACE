@@ -25,7 +25,7 @@ WARNFLAGS = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 
 ALL_CFLAGS = $(CFLAGS) $(WARNFLAGS) $(DEP_CFLAGS) -MMD -MP
 
-OBJS = main.o mainwin.o games.o conn.o db.o world.o mapview.o units.o intel.o dialogs.o
+OBJS = main.o mainwin.o games.o conn.o db.o world.o mapview.o units.o intel.o dialogs.o telegrams.o
 
 all: gtkace
 

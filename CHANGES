@@ -1,3 +1,25 @@
+GtkACE 0.5.0 (2026-11-07)
+
+  Telegram window (Diplomacy -> Telegrams, Ctrl+T, the toolbar's
+  Telegrams button, or click the mail notice in the status bar):
+  - Telegrams, bulletins, production reports and announcements are
+    captured whenever "read" or "wire" runs and kept in the game
+    database, so they stay after the server deletes them.  Duplicates
+    are skipped.
+  - Folders: all received, telegrams, bulletins, production reports,
+    announcements and sent, with unread counts.  Unread messages are in
+    bold; the window opens at the oldest unread one.
+  - Check for New, New, Reply (quoting the original), Forward, Delete,
+    Previous and Next.
+  - Writing: choose a country or "Everyone" for an announcement.  Lines
+    are sent in answer to the server's prompts; blank lines, "." and
+    "~x" lines are protected so they don't end or abort the telegram.
+    Shows the length against the server's 1024-character limit and keeps
+    a copy in Sent.
+  - Option to delete telegrams from the server once GtkACE has them.
+  - AutoRead now stores arriving telegrams in the window.
+  - The status bar shows the number of unread messages.
+
 GtkACE 0.4.0 (2026-11-07)
 
   Command dialogs (Commands menu, and the map's right-click menu):

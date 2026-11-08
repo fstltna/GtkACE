@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.4.0):
+Working now (0.5.0):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,
@@ -21,8 +21,11 @@ Working now (0.4.0):
 * Command line with history (Up/Down); server output in a fixed-width
   window with highlighting; when a command asks a question, the prompt
   shows beside the command line and Escape aborts it
-* Telegram and announcement notices in the status bar (both with and
-  without `toggle inform`), and AutoRead
+* Telegram window (Ctrl+T): telegrams, bulletins, production reports and
+  announcements are kept in the game database, in folders with unread
+  counts.  Reply (with quoting), forward, delete, and write telegrams or
+  announcements; a copy of what you send is kept.  Notices in the status
+  bar (with or without `toggle inform`) and AutoRead fill it automatically.
 * BTU and time used in the status bar
 * A local database per game (SQLite, in `~/.local/share/gtkace/`), filled
   with the server's `xdump` and `bmap` output.  Tables are created from the
@@ -58,7 +61,7 @@ Working now (0.4.0):
 Planned for later milestones: more intelligence sources (radar maps,
 recon and satellite pictures, attack and battle reports); the report
 windows; more command dialogs (attack, fire, fly, bomb, distribute,
-threshold ...); the telegram window; colour schemes; and WinACE's tools
+threshold ...); colour schemes; and WinACE's tools
 (production, build projection, famine relief, fortify, range table ...).
 
 ## Building

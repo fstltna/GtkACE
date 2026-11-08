@@ -71,6 +71,11 @@ void       conn_abort(void);
 void       conn_command(const char *cmd, guint flags,
                         CmdLineFunc line, CmdDoneFunc done, gpointer data);
 int        conn_queue_length(void);
+/* A command whose prompts (C_FLUSH) are answered from a NULL-terminated
+ * list, in order; prompts beyond the list are asked as usual. */
+void       conn_command_answers(const char *cmd, guint flags,
+                                const char *const *answers,
+                                CmdDoneFunc done, gpointer data);
 
 /* ---------------------------------------------------------- database */
 
@@ -152,6 +157,16 @@ int         world_match_unit_type(const char *text, int *type, int *len);
 /* Our relation with a country: 0 at war .. 4 allied, -1 unknown */
 int         world_relation(int cnum);
 int         world_relation_kind(int cnum);           /* REL_ENEMY ... */
+
+/* -------------------------------------------------------- telegrams */
+
+void        tele_command_start(const char *cmd);
+void        tele_line(const char *text);
+void        tele_command_end(void);
+void        tele_window_show(void);
+void        tele_check(void);           /* read and wire into the store */
+void        tele_autoread(void);        /* a telegram arrived */
+int         tele_unread(void);
 
 /* ------------------------------------------------------------ intel */
 

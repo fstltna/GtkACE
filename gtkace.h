@@ -124,6 +124,8 @@ typedef struct {
      * relation: enemy, allied, neutral, old (not seen recently) */
     guchar foreign[3][4];
     gboolean intel;      /* own/des come from a sighting, not our data */
+    char  contact;       /* radar or recon contact: ship letter, $ ... */
+    gboolean contact_old;
     /* filled in by the colour scheme (scheme.c) */
     guchar smark;        /* SM_* */
     int sval;            /* value for the graduated scheme */
@@ -167,6 +169,7 @@ int         world_country_by_name(const char *name);  /* -1 if unknown */
  * of text: returns the class (or -1) and sets *type and *len (chars
  * of the type name consumed). */
 int         world_match_unit_type(const char *text, int *type, int *len);
+int         world_unit_type_by_mnem(UnitClass c, const char *mnem);
 /* Our relation with a country: 0 at war .. 4 allied, -1 unknown */
 int         world_relation(int cnum);
 int         world_relation_kind(int cnum);           /* REL_ENEMY ... */

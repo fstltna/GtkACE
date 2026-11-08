@@ -470,7 +470,8 @@ panel_intel_sector(int x, int y, GString *title)
 {
     static const char *cols[] = {
         "eff", "effic", "civ", "civil", "mil", "milit", "shell", "shell",
-        "gun", "gun", "petrol", "petrol", "food", "food", "bar", "bar",
+        "gun", "gun", "petrol", "petrol", "iron", "iron", "food", "food",
+        "bar", "bar",
         "road", "road", "rail", "rail", "defense", "dfense", NULL
     };
     sqlite3_stmt *st;
@@ -572,6 +573,38 @@ panel_intel_units(int x, int y, GString *u, int *shown)
     return total;
 }
 
+/* A radar blip or recon contact in the sector; appends a line to u */
+static int
+panel_contact(int x, int y, GString *u)
+{
+    sqlite3_stmt *st;
+    int n = 0;
+
+    if (!db_table_exists("intel_contact")
+        || sqlite3_prepare_v2(db_handle(), "SELECT what, owner, source, seen "
+                              "FROM intel_contact WHERE x=? AND y=?", -1, &st,
+                              NULL) != SQLITE_OK)
+        return 0;
+    sqlite3_bind_int(st, 1, x);
+    sqlite3_bind_int(st, 2, y);
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        const char *what = (const char *)sqlite3_column_text(st, 0);
+        const char *src = (const char *)sqlite3_column_text(st, 2);
+        char *age = intel_age(sqlite3_column_int64(st, 3));
+
+        g_string_append_printf(u, "%sContact: ", u->len ? "\n" : "");
+        if (sqlite3_column_type(st, 1) != SQLITE_NULL)
+            g_string_append_printf(u, "%s ",
+                                   world_country_name(sqlite3_column_int(st, 1)));
+        g_string_append_printf(u, "%s, %s%s%s", what ? what : "?", age,
+                               src && *src ? " by " : "", src ? src : "");
+        g_free(age);
+        n = 1;
+    }
+    sqlite3_finalize(st);
+    return n;
+}
+
 void
 panel_show_sector(int x, int y)
 {
@@ -644,7 +677,7 @@ panel_show_sector(int x, int y)
     /* our units in this sector */
     {
         GString *u = g_string_new(NULL);
-        int shown = 0, total = 0;
+        int shown = 0, total = 0, contact;
 
         for (int c = 0; c < UC_COUNT; c++) {
             GPtrArray *a = world_units(c);
@@ -673,8 +706,9 @@ panel_show_sector(int x, int y)
             g_string_prepend(u, head);
             g_free(head);
         }
+        contact = panel_contact(x, y, u);
         gtk_label_set_text(GTK_LABEL(mw.panel_units), u->str);
-        gtk_widget_set_visible(mw.panel_units, total > 0);
+        gtk_widget_set_visible(mw.panel_units, total > 0 || contact);
         g_string_free(u, TRUE);
     }
     gtk_widget_set_sensitive(mw.panel_grid, have);
@@ -775,7 +809,7 @@ static const char *changing_cmds[] = {
     "transport", "order", "qorder", "sorder",
     /* these update the bmap on the server */
     "lookout", "llook", "radar", "lradar", "sonar", "coastwatch",
-    "skywatch", "spy",
+    "skywatch", "spy", "satellite",
     /* diplomacy changes how other countries' units are shown */
     "declare",
     /* deity */

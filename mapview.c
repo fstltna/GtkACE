@@ -599,6 +599,24 @@ draw(GtkWidget *w, cairo_t *cr, gpointer data)
                     draw_text(cr, big, t, px, py);
                 }
             }
+            if (sec && sec->contact && s >= 10) {
+                /* a radar blip or recon contact: a letter in a yellow
+                 * disc (grey when old) at the hex's right */
+                char t[2] = { sec->contact, 0 };
+                double cx = px + s * 0.5, cy = py + s * 0.1, r = s * 0.3;
+
+                cairo_arc(cr, cx, cy, r, 0, 2 * G_PI);
+                if (sec->contact_old)
+                    cairo_set_source_rgb(cr, 0.75, 0.75, 0.75);
+                else
+                    cairo_set_source_rgb(cr, 1.0, 0.85, 0.1);
+                cairo_fill_preserve(cr);
+                cairo_set_source_rgb(cr, 0, 0, 0);
+                cairo_set_line_width(cr, 1);
+                cairo_stroke(cr);
+                draw_text(cr, small, t, cx, cy);
+                cairo_set_line_width(cr, s > 10 ? 1.0 : 0.5);
+            }
             if (scheme.mode == SCHEME_GRADUATED && scheme.show_value && sec
                 && (sec->smark & SM_HAS) && s >= 14) {
                 char v[16];

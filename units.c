@@ -70,7 +70,7 @@ static struct {
 
 #define FOREIGN_PAGE UC_COUNT
 enum { F_OWNER, F_KIND, F_UID, F_TYPE, F_XY, F_MIL, F_AGE, F_SOURCE, F_X, F_Y,
-       F_SEEN, F_NCOLS };
+       F_SEEN, F_EFF, F_NCOLS };
 
 static int
 col_index(sqlite3_stmt *st, const char *name)
@@ -178,7 +178,7 @@ fill_foreign(void)
     gtk_list_store_clear(uw.foreign);
     if (!db_is_open() || !db_table_exists("intel_unit")
         || sqlite3_prepare_v2(db_handle(), "SELECT cls, uid, owner, type, x, y, "
-                              "mil, source, seen FROM intel_unit ORDER BY "
+                              "mil, source, seen, eff FROM intel_unit ORDER BY "
                               "owner, cls, uid", -1, &st, NULL) != SQLITE_OK)
         return;
     while (sqlite3_step(st) == SQLITE_ROW) {
@@ -207,7 +207,9 @@ fill_foreign(void)
                            ? -1 : sqlite3_column_int(st, 6),
                            F_AGE, age,
                            F_SOURCE, sqlite3_column_text(st, 7),
-                           F_X, x, F_Y, y, F_SEEN, seen, -1);
+                           F_X, x, F_Y, y, F_SEEN, seen,
+                           F_EFF, sqlite3_column_type(st, 9) == SQLITE_NULL
+                           ? -1 : sqlite3_column_int(st, 9), -1);
         g_free(owner);
         g_free(tname);
         g_free(xy);
@@ -391,9 +393,10 @@ mil_cell(GtkTreeViewColumn *col, GtkCellRenderer *r, GtkTreeModel *m,
     int v;
     char buf[16] = "";
 
-    gtk_tree_model_get(m, it, F_MIL, &v, -1);
+    gtk_tree_model_get(m, it, GPOINTER_TO_INT(data), &v, -1);
     if (v >= 0)
-        snprintf(buf, sizeof(buf), "~%d", v);
+        snprintf(buf, sizeof(buf), GPOINTER_TO_INT(data) == F_EFF ? "%d%%"
+                 : "~%d", v);
     g_object_set(r, "text", buf, NULL);
 }
 
@@ -404,7 +407,8 @@ build_foreign(void)
     cols[] = {
         { "Owner", F_OWNER, F_OWNER, FALSE }, { "Kind", F_KIND, F_KIND, FALSE },
         { "#", F_UID, F_UID, TRUE }, { "Type", F_TYPE, F_TYPE, FALSE },
-        { "x,y", F_XY, F_X, TRUE }, { "Mil", F_MIL, F_MIL, TRUE },
+        { "x,y", F_XY, F_X, TRUE }, { "Eff", F_EFF, F_EFF, TRUE },
+        { "Mil", F_MIL, F_MIL, TRUE },
         { "Seen", F_AGE, F_SEEN, FALSE }, { "By", F_SOURCE, F_SOURCE, FALSE },
     };
     GtkWidget *tv, *sw;
@@ -412,7 +416,8 @@ build_foreign(void)
     uw.foreign = gtk_list_store_new(F_NCOLS, G_TYPE_STRING, G_TYPE_STRING,
                                     G_TYPE_INT, G_TYPE_STRING, G_TYPE_STRING,
                                     G_TYPE_INT, G_TYPE_STRING, G_TYPE_STRING,
-                                    G_TYPE_INT, G_TYPE_INT, G_TYPE_INT64);
+                                    G_TYPE_INT, G_TYPE_INT, G_TYPE_INT64,
+                                    G_TYPE_INT);
     gtk_tree_sortable_set_sort_func(GTK_TREE_SORTABLE(uw.foreign), F_X,
                                     sort_foreign_xy, NULL, NULL);
     tv = gtk_tree_view_new_with_model(GTK_TREE_MODEL(uw.foreign));
@@ -424,9 +429,11 @@ build_foreign(void)
         g_object_set(r, "family", "Monospace", NULL);
         if (cols[i].num)
             g_object_set(r, "xalign", 1.0, NULL);
-        if (cols[i].col == F_MIL) {
+        if (cols[i].col == F_MIL || cols[i].col == F_EFF) {
             c = gtk_tree_view_column_new_with_attributes(cols[i].title, r, NULL);
-            gtk_tree_view_column_set_cell_data_func(c, r, mil_cell, NULL, NULL);
+            gtk_tree_view_column_set_cell_data_func(c, r, mil_cell,
+                                                    GINT_TO_POINTER(cols[i].col),
+                                                    NULL);
         } else {
             c = gtk_tree_view_column_new_with_attributes(cols[i].title, r,
                                                          "text", cols[i].col,

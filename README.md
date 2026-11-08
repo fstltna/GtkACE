@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.9.0):
+Working now (0.10.0):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,
@@ -47,6 +47,11 @@ Working now (0.9.0):
   their units with WinACE's red (enemy), green (allied), blue (neutral) and
   grey (more than a day old) icons.  The sector panel shows what was seen
   and when; the Units window's Foreign tab lists every sighting.
+  Radar maps (radar, lradar, satellite) put ships the radar shows on the
+  map as contacts (a letter in a yellow disc); satellite and spy plane
+  reports record sectors, ships and land units; reconnaissance flights
+  record what they fly over; and attack, assault and paradrop record
+  the sector they are about to hit.
   Reports -> Intelligence runs the reports; File -> Clear Intelligence
   forgets them.
 * Command dialogs (Commands menu or right-click on the map): Move, with
@@ -79,8 +84,8 @@ Working now (0.9.0):
 * Report menus and toolbar (budget, census, nation, news, power, report,
   starvation, wire, relations, maps and more)
 
-Planned for later milestones: more intelligence sources (radar maps,
-recon and satellite pictures, attack and battle reports).
+All of WinACE's main features are now in; what comes next is up to
+the players.
 
 ## Building
 

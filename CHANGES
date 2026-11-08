@@ -1,3 +1,25 @@
+GtkACE 0.10.0 (2026-11-07)
+
+  More intelligence sources, as WinACE's EmpireParse:
+  - Radar maps (radar, lradar and the satellite command's picture): the
+    ships a radar shows, which Empire gives only as the first letter of
+    their type, appear on the map as contacts, a letter in a yellow disc
+    (grey when old).  Our own ships and units, and units just
+    identified, are left out; a sector the radar sees empty loses its
+    old contact.
+  - Satellite and spy plane reports: every sector (owner, designation,
+    efficiency, roads, rails, defense, civilians, military, shells,
+    guns, iron, petrol, food), ship and land unit in them is recorded,
+    with its efficiency.
+  - Reconnaissance flights: what they see is recorded, and "Flying over
+    <country> ships/land units" becomes a contact when nothing better is
+    known.
+  - Attack, assault and paradrop: "x,y is a N% <country> <type> with
+    approximately M military" records the target sector.
+  - The sector panel shows contacts and iron; the Units window's Foreign
+    tab shows efficiency.  File -> Clear Intelligence clears contacts
+    too.  The satellite command refreshes the map afterwards.
+
 GtkACE 0.9.0 (2026-11-07)
 
   Tools menu, as WinACE's tools.  They ask the server for its figures

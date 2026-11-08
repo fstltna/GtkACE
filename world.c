@@ -154,6 +154,23 @@ world_match_unit_type(const char *text, int *type, int *len)
     return -1;
 }
 
+/* A type by its mnemonic ("dd"), as satellite and spy plane reports
+ * start it.  -1 if unknown. */
+int
+world_unit_type_by_mnem(UnitClass c, const char *mnem)
+{
+    GHashTableIter it;
+    gpointer k, v;
+
+    if (!unit_mnem[c])
+        return -1;
+    g_hash_table_iter_init(&it, unit_mnem[c]);
+    while (g_hash_table_iter_next(&it, &k, &v))
+        if (!strcmp(v, mnem))
+            return GPOINTER_TO_INT(k);
+    return -1;
+}
+
 int
 world_relation(int cnum)
 {
@@ -242,6 +259,20 @@ load_intel(void)
                 : world_relation_kind(own);
             if (s->foreign[cls][kind] < 255)
                 s->foreign[cls][kind]++;
+        }
+        sqlite3_finalize(st);
+    }
+    if (db_table_exists("intel_contact")
+        && (st = prepare("SELECT x, y, mark, seen FROM intel_contact"))) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            Sector *s = world_sector(sqlite3_column_int(st, 0),
+                                     sqlite3_column_int(st, 1));
+            const char *m = (const char *)sqlite3_column_text(st, 2);
+
+            if (!s || !m || !m[0])
+                continue;
+            s->contact = m[0];
+            s->contact_old = sqlite3_column_int64(st, 3) < old;
         }
         sqlite3_finalize(st);
     }

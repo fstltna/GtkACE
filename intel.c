@@ -6,7 +6,10 @@
  * Every line of output from commands the player runs is checked, so
  * sightings are recorded whichever command produced them: lookout,
  * llook, coastwatch, skywatch, sonar, spy, and others that print the
- * same kind of line.
+ * same kind of line.  Also radar maps (radar, lradar, satellite),
+ * satellite and spy plane reports, reconnaissance flights (WinACE
+ * ParseReconReport) and what attack, assault and paradrop say of their
+ * target (ParseAttack).
  */
 #include <string.h>
 #include <stdlib.h>
@@ -16,6 +19,11 @@
 static struct {
     char source[16];            /* command that produced the output */
     gboolean in_spy;            /* inside a spy report table */
+    gboolean in_sat;            /* satellite or spy plane sector rows */
+    int sat_cls;                /* satellite unit rows: UC_SHIP, UC_LAND */
+    /* radar maps: "x,y efficiency N%, max range R" then the map */
+    gboolean rad_pending, rad_wait, rad_active;
+    int rad_x, rad_y, rad_range, rad_row;
     gboolean changed;
     gboolean in_txn;
 } in;
@@ -43,7 +51,13 @@ ensure_tables(void)
                  "CREATE TABLE IF NOT EXISTS intel_unit (cls INTEGER, "
                  "uid INTEGER, owner INTEGER, type INTEGER, x INTEGER, "
                  "y INTEGER, eff INTEGER, mil INTEGER, source TEXT, "
-                 "seen INTEGER, PRIMARY KEY (cls, uid));",
+                 "seen INTEGER, PRIMARY KEY (cls, uid));"
+                 "CREATE TABLE IF NOT EXISTS intel_contact (x INTEGER, "
+                 "y INTEGER, mark TEXT, what TEXT, owner INTEGER, "
+                 "source TEXT, seen INTEGER, PRIMARY KEY (x, y));",
+                 NULL, NULL, NULL);
+    /* added in 0.10.0; fails harmlessly once the column is there */
+    sqlite3_exec(db, "ALTER TABLE intel_sect ADD COLUMN iron INTEGER",
                  NULL, NULL, NULL);
     return TRUE;
 }
@@ -74,7 +88,8 @@ bind_int_or_null(sqlite3_stmt *st, int col, int v)
 typedef struct {
     int x, y, owner, oldown;
     char des, newdes;
-    int eff, civ, mil, shell, gun, petrol, food, bar, road, rail, defense;
+    int eff, civ, mil, shell, gun, petrol, iron, food, bar, road, rail,
+        defense;
 } SectIntel;
 
 static void
@@ -83,7 +98,7 @@ sect_intel_init(SectIntel *s)
     s->x = s->y = 0;
     s->des = s->newdes = 0;
     s->owner = s->oldown = s->eff = s->civ = s->mil = s->shell = s->gun
-        = s->petrol = s->food = s->bar = s->road = s->rail = s->defense
+        = s->petrol = s->iron = s->food = s->bar = s->road = s->rail = s->defense
         = INT_UNKNOWN;
 }
 
@@ -101,7 +116,7 @@ store_sector(const SectIntel *s)
     if (sqlite3_prepare_v2(db_handle(),
         "INSERT INTO intel_sect (x, y, owner, des, newdes, eff, civ, mil, "
         "shell, gun, petrol, food, bar, road, rail, defense, oldown, source, "
-        "seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "seen, iron) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT (x, y) DO UPDATE SET "
         "owner = coalesce(excluded.owner, owner), "
         "des = coalesce(excluded.des, des), "
@@ -120,6 +135,7 @@ store_sector(const SectIntel *s)
         "rail = coalesce(excluded.rail, rail), "
         "defense = coalesce(excluded.defense, defense), "
         "oldown = coalesce(excluded.oldown, oldown), "
+        "iron = coalesce(excluded.iron, iron), "
         "source = excluded.source, seen = excluded.seen",
         -1, &st, NULL) != SQLITE_OK) {
         g_warning("intel: %s", sqlite3_errmsg(db_handle()));
@@ -146,13 +162,15 @@ store_sector(const SectIntel *s)
     bind_int_or_null(st, 17, s->oldown);
     sqlite3_bind_text(st, 18, in.source, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(st, 19, now());
+    bind_int_or_null(st, 20, s->iron);
     sqlite3_step(st);
     sqlite3_finalize(st);
     in.changed = TRUE;
 }
 
 static void
-store_unit(int cls, int uid, int owner, int type, int x, int y, int mil)
+store_unit(int cls, int uid, int owner, int type, int x, int y, int mil,
+           int eff)
 {
     sqlite3_stmt *st;
 
@@ -161,11 +179,12 @@ store_unit(int cls, int uid, int owner, int type, int x, int y, int mil)
     begin();
     if (sqlite3_prepare_v2(db_handle(),
         "INSERT INTO intel_unit (cls, uid, owner, type, x, y, eff, mil, "
-        "source, seen) VALUES (?,?,?,?,?,?,NULL,?,?,?) "
+        "source, seen) VALUES (?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT (cls, uid) DO UPDATE SET "
         "owner = CASE WHEN excluded.owner < 0 THEN owner "
         "        ELSE excluded.owner END, "
         "type = excluded.type, x = excluded.x, y = excluded.y, "
+        "eff = coalesce(excluded.eff, eff), "
         "mil = coalesce(excluded.mil, mil), "
         "source = excluded.source, seen = excluded.seen",
         -1, &st, NULL) != SQLITE_OK) {
@@ -178,12 +197,58 @@ store_unit(int cls, int uid, int owner, int type, int x, int y, int mil)
     sqlite3_bind_int(st, 4, type);
     sqlite3_bind_int(st, 5, x);
     sqlite3_bind_int(st, 6, y);
-    bind_int_or_null(st, 7, mil);
-    sqlite3_bind_text(st, 8, in.source, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(st, 9, now());
+    bind_int_or_null(st, 7, eff);
+    bind_int_or_null(st, 8, mil);
+    sqlite3_bind_text(st, 9, in.source, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 10, now());
     sqlite3_step(st);
     sqlite3_finalize(st);
     in.changed = TRUE;
+}
+
+/* Something seen that can't be identified: a radar blip, ships or land
+ * units a reconnaissance plane flew over.  One per sector; mark is what
+ * the map shows (the radar letter, $ for a satellite). */
+static void
+store_contact(int x, int y, char mark, const char *what, int owner)
+{
+    sqlite3_stmt *st;
+    char m[2] = { mark, 0 };
+
+    begin();
+    if (sqlite3_prepare_v2(db_handle(), "INSERT OR REPLACE INTO intel_contact "
+                           "(x, y, mark, what, owner, source, seen) "
+                           "VALUES (?,?,?,?,?,?,?)", -1, &st, NULL) != SQLITE_OK)
+        return;
+    sqlite3_bind_int(st, 1, x);
+    sqlite3_bind_int(st, 2, y);
+    sqlite3_bind_text(st, 3, m, 1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 4, what, -1, SQLITE_TRANSIENT);
+    if (owner >= 0)
+        sqlite3_bind_int(st, 5, owner);
+    sqlite3_bind_text(st, 6, in.source, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 7, now());
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+    in.changed = TRUE;
+}
+
+/* A radar swept this sector and saw nothing there now */
+static void
+forget_contact(int x, int y)
+{
+    sqlite3_stmt *st;
+
+    begin();
+    if (sqlite3_prepare_v2(db_handle(), "DELETE FROM intel_contact WHERE "
+                           "x=? AND y=?", -1, &st, NULL) != SQLITE_OK)
+        return;
+    sqlite3_bind_int(st, 1, x);
+    sqlite3_bind_int(st, 2, y);
+    sqlite3_step(st);
+    if (sqlite3_changes(db_handle()))
+        in.changed = TRUE;
+    sqlite3_finalize(st);
 }
 
 /* ---------------------------------------------------------- parsing */
@@ -328,7 +393,7 @@ try_unit(const char *line, const char *at, int x, int y)
     }
     if (!parse_unit_desc(rest, end, &cls, &type, &uid))
         return FALSE;
-    store_unit(cls, uid, owner, type, x, y, mil);
+    store_unit(cls, uid, owner, type, x, y, mil, INT_UNKNOWN);
     return TRUE;
 }
 
@@ -354,7 +419,7 @@ try_sonar(const char *line, const char *at, int x, int y)
                 owner = world_country_by_name(g_strstrip(name));
                 g_free(name);
             }
-            store_unit(cls, uid, owner, type, x, y, INT_UNKNOWN);
+            store_unit(cls, uid, owner, type, x, y, INT_UNKNOWN, INT_UNKNOWN);
             return TRUE;
         }
     }
@@ -437,8 +502,322 @@ try_spy_unit(const char *line)
     name = g_strndup(op + 1, cp - op - 1);
     owner = world_country_by_name(name);
     g_free(name);
-    store_unit(cls, uid, owner, type, x, y, INT_UNKNOWN);
+    store_unit(cls, uid, owner, type, x, y, INT_UNKNOWN, INT_UNKNOWN);
     return TRUE;
+}
+
+/* "x,y is a N% <country> <sector type> with approximately M military."
+ * (attack, assault, paradrop: what they are about to hit) */
+static gboolean
+try_attack(const char *line)
+{
+    const char *p = strstr(line, " is a "), *w, *pct;
+    int x, y;
+    char *end, *rest;
+    SectIntel s;
+
+    if (!p || !(w = strstr(p, " with approximately "))
+        || !g_str_has_suffix(line, " military."))
+        return FALSE;
+    x = strtol(line, &end, 10);
+    if (end == line || *end != ',')
+        return FALSE;
+    y = strtol(end + 1, &end, 10);
+    if (end != p)
+        return FALSE;
+    pct = p + 6;
+    sect_intel_init(&s);
+    s.x = world_wrap_x(x);
+    s.y = world_wrap_y(y);
+    s.eff = strtol(pct, &end, 10);
+    if (end == pct || *end != '%' || end[1] != ' ')
+        return FALSE;
+    s.mil = atoi(w + 20);
+    /* "<country> <sector type>": the country name may have spaces, so
+     * try each split until both halves are known */
+    rest = g_strndup(end + 2, w - (end + 2));
+    for (char *sp = strchr(rest, ' '); sp; sp = strchr(sp + 1, ' ')) {
+        *sp = 0;
+        s.owner = world_country_by_name(rest);
+        s.des = world_des_by_name(sp + 1);
+        *sp = ' ';
+        if (s.owner >= 0 && s.des)
+            break;
+    }
+    g_free(rest);
+    if (s.owner < 0 || !s.des)
+        return FALSE;
+    store_sector(&s);
+    return TRUE;
+}
+
+/* Satellite and spy plane sector rows:
+ *    sect   type own  eff eff eff eff  civ  mil  shl  gun iron  pet  food
+ *    3,-1      c    2  100   0   0   0  950   20    0    0    0    0   100 */
+static gboolean
+try_sat_sect(const char *line)
+{
+    int x, y, v[12];
+    char *end, des;
+    const char *p;
+    SectIntel s;
+
+    x = strtol(line, &end, 10);
+    if (end == line || *end != ',')
+        return FALSE;
+    y = strtol(end + 1, &end, 10);
+    p = end;
+    while (*p == ' ')
+        p++;
+    if (!*p || p[1] != ' ' || g_ascii_isdigit(*p))
+        return FALSE;
+    des = *p;
+    if (sscanf(p + 1, "%d %d %d %d %d %d %d %d %d %d %d %d", &v[0], &v[1],
+               &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9],
+               &v[10], &v[11]) != 12)
+        return FALSE;
+    sect_intel_init(&s);
+    s.x = world_wrap_x(x);
+    s.y = world_wrap_y(y);
+    s.des = des;
+    s.owner = v[0];
+    s.eff = v[1];
+    s.road = v[2];
+    s.rail = v[3];
+    s.defense = v[4];
+    s.civ = v[5];
+    s.mil = v[6];
+    s.shell = v[7];
+    s.gun = v[8];
+    s.iron = v[9];
+    s.petrol = v[10];
+    s.food = v[11];
+    if (s.owner)
+        store_sector(&s);
+    return TRUE;
+}
+
+/* Satellite and spy plane unit rows, after a heading saying which:
+ *     own shp# ship type                                   sector   eff
+ *       2    4 dd   destroyer  Bounty                    -3,3    100%
+ *     own lnd# unit type         sector   eff
+ *       2    3 inf  infantry    -2,4    100%
+ * The type ("mnemonic  name") is cut to 16 characters; ships have their
+ * own name after it. */
+static gboolean
+try_sat_unit(const char *line)
+{
+    const char *p = line, *tail;
+    int owner, uid, type, x, y, eff;
+    char *end, *name;
+    gsize len = strlen(line);
+
+    while (*p == '\t' || *p == ' ')
+        p++;
+    if (len < 20 || line[len - 1] != '%')
+        return FALSE;
+    owner = strtol(p, &end, 10);
+    if (end == p || *end != ' ')
+        return FALSE;
+    p = end;
+    uid = strtol(p, &end, 10);
+    if (end == p || *end != ' ')
+        return FALSE;
+    p = end + 1;                /* start of the type name */
+    /* from the right: "x,y    eff%" */
+    tail = line + len - 1;
+    while (tail > p && tail[-1] != ' ')
+        tail--;
+    eff = atoi(tail);
+    while (tail > p && tail[-1] == ' ')
+        tail--;
+    while (tail > p && tail[-1] != ' ')
+        tail--;
+    x = strtol(tail, &end, 10);
+    if (end == tail || *end != ',')
+        return FALSE;
+    y = strtol(end + 1, &end, 10);
+    if (tail - p < 1)
+        return FALSE;
+    name = g_strndup(p, MIN(16, tail - p));
+    if (strchr(name, ' '))
+        *strchr(name, ' ') = 0;
+    type = world_unit_type_by_mnem(in.sat_cls, name);
+    g_free(name);
+    if (type < 0)
+        return FALSE;
+    store_unit(in.sat_cls, uid, owner, type, world_wrap_x(x), world_wrap_y(y),
+               INT_UNKNOWN, eff);
+    return TRUE;
+}
+
+/* Have we seen owner's units of class cls here in the last minutes? */
+static gboolean
+seen_here(int x, int y, int cls, int owner)
+{
+    sqlite3_stmt *st;
+    gboolean seen = FALSE;
+
+    if (sqlite3_prepare_v2(db_handle(), "SELECT 1 FROM intel_unit WHERE x=? "
+                           "AND y=? AND cls=? AND owner=? AND seen >= ?", -1,
+                           &st, NULL) != SQLITE_OK)
+        return FALSE;
+    sqlite3_bind_int(st, 1, x);
+    sqlite3_bind_int(st, 2, y);
+    sqlite3_bind_int(st, 3, cls);
+    sqlite3_bind_int(st, 4, owner);
+    sqlite3_bind_int64(st, 5, now() - 300);
+    seen = sqlite3_step(st) == SQLITE_ROW;
+    sqlite3_finalize(st);
+    return seen;
+}
+
+/* "Flying over <country> ships in x,y" (reconnaissance without a spy
+ * plane: there is no telling which ships) */
+static gboolean
+try_flying_over(const char *line)
+{
+    const char *p, *in_;
+    int x, y, owner;
+    gboolean ships;
+    char *name, *end;
+
+    if (!g_str_has_prefix(line, "Flying over "))
+        return FALSE;
+    p = line + 12;
+    if ((in_ = strstr(p, " ships in ")))
+        ships = TRUE;
+    else if ((in_ = strstr(p, " land units in ")))
+        ships = FALSE;
+    else
+        return FALSE;
+    name = g_strndup(p, in_ - p);
+    owner = world_country_by_name(name);
+    g_free(name);
+    p = in_ + (ships ? 10 : 15);
+    x = strtol(p, &end, 10);
+    if (end == p || *end != ',')
+        return FALSE;
+    y = strtol(end + 1, &end, 10);
+    x = world_wrap_x(x);
+    y = world_wrap_y(y);
+    if ((owner >= 0 && owner == my_cnum)
+        || seen_here(x, y, ships ? UC_SHIP : UC_LAND, owner))
+        return TRUE;
+    store_contact(x, y, ships ? 'S' : 'L', ships ? "ships" : "land units",
+                  owner);
+    return TRUE;
+}
+
+static gboolean
+letter_is(UnitClass c, int type, char letter)
+{
+    const char *n = world_unit_type_name(c, type);
+
+    return n[0] && g_ascii_toupper(n[0]) == letter;
+}
+
+/* A unit radar or a satellite image shows as letter (the first letter
+ * of its type) that we know already: one of ours, or one seen in this
+ * sector just now */
+static gboolean
+known_letter(int x, int y, char letter)
+{
+    sqlite3_stmt *st;
+    gboolean known = FALSE;
+
+    for (int c = UC_SHIP; c <= UC_LAND; c++) {
+        GPtrArray *a = world_units(c);
+
+        for (guint i = 0; i < a->len; i++) {
+            Unit *u = g_ptr_array_index(a, i);
+
+            if (u->x == x && u->y == y && letter_is(c, u->type, letter))
+                return TRUE;
+        }
+    }
+    if (sqlite3_prepare_v2(db_handle(), "SELECT cls, type FROM intel_unit "
+                           "WHERE x=? AND y=? AND seen >= ?", -1, &st, NULL)
+        != SQLITE_OK)
+        return FALSE;
+    sqlite3_bind_int(st, 1, x);
+    sqlite3_bind_int(st, 2, y);
+    sqlite3_bind_int64(st, 3, now() - 300);
+    while (!known && sqlite3_step(st) == SQLITE_ROW)
+        known = letter_is(sqlite3_column_int(st, 0),
+                          sqlite3_column_int(st, 1), letter);
+    sqlite3_finalize(st);
+    return known;
+}
+
+/* "[<unit> at ]x,y efficiency N%, max range R" starts a radar map
+ * (satellites print it too, and their map later, after "Satellite
+ * radar report") */
+static gboolean
+try_radar_head(const char *line)
+{
+    const char *e = strstr(line, " efficiency "), *p;
+    int x, y, eff, r;
+    char *end;
+
+    if (!e || !strstr(e, "%, max range "))
+        return FALSE;
+    for (p = e; p > line && p[-1] != ' '; p--)
+        ;
+    x = strtol(p, &end, 10);
+    if (end == p || *end != ',')
+        return FALSE;
+    y = strtol(end + 1, &end, 10);
+    if (end != e || sscanf(e, " efficiency %d%%, max range %d", &eff, &r) != 2)
+        return FALSE;
+    in.rad_x = x;
+    in.rad_y = y;
+    in.rad_range = r;
+    in.rad_pending = TRUE;
+    in.rad_wait = FALSE;
+    in.rad_active = FALSE;
+    in.rad_row = 0;
+    return TRUE;
+}
+
+/* One row of a radar map.  Row r, column c is the sector
+ * (cx - 2R + c, cy - R + r), or from -WORLD/2 when the radar sees the
+ * whole world; blanks are not sectors.  Capital letters are ships (the
+ * first letter of the type), $ satellites, 0 the radar itself. */
+static void
+radar_row(const char *line)
+{
+    int r = in.rad_range;
+    int lx = 4 * r + 1 < world_x ? in.rad_x - 2 * r : in.rad_x - world_x / 2;
+    int ly = 2 * r + 1 < world_y ? in.rad_y - r : in.rad_y - world_y / 2;
+    int height = MIN(2 * r + 1, world_y);
+    int y = world_wrap_y(ly + in.rad_row);
+
+    for (int c = 0; line[c]; c++) {
+        int x = world_wrap_x(lx + c);
+        char ch = line[c];
+
+        if (ch == ' ' || ch == '0')
+            continue;
+        if (g_ascii_isupper(ch)) {
+            /* radars show ships; satellite images land units too */
+            char *what = g_strdup_printf("%s, type starting %c",
+                                         in.rad_wait ? "ship or land unit"
+                                         : "ship", ch);
+
+            if (known_letter(x, y, ch))
+                forget_contact(x, y);
+            else
+                store_contact(x, y, ch, what, -1);
+            g_free(what);
+        } else if (ch == '$') {
+            store_contact(x, y, '$', "satellite", -1);
+        } else {
+            forget_contact(x, y);
+        }
+    }
+    if (++in.rad_row >= height)
+        in.rad_active = FALSE;
 }
 
 void
@@ -446,7 +825,8 @@ intel_command_start(const char *cmd)
 {
     in.source[0] = 0;
     sscanf(cmd, " %15[a-zA-Z]", in.source);
-    in.in_spy = FALSE;
+    in.in_spy = in.in_sat = FALSE;
+    in.rad_pending = in.rad_wait = in.rad_active = FALSE;
     in.changed = FALSE;
 }
 
@@ -458,11 +838,57 @@ intel_line(const char *text)
 
     if (!db_is_open() || world_x <= 0)
         return;
+    /* radar maps */
+    if (in.rad_active) {
+        if (!*text)
+            in.rad_active = FALSE;
+        else
+            radar_row(text);
+        return;
+    }
+    if (try_radar_head(text))
+        return;
+    if (in.rad_pending) {
+        if (!strcmp(text, "Satellite radar report")) {
+            in.rad_pending = FALSE;
+            in.rad_active = TRUE;
+            return;
+        }
+        if (g_str_has_prefix(text, "Satellite ")
+            || g_str_has_prefix(text, "Some noise")) {
+            in.rad_wait = TRUE;         /* a satellite: the map comes later */
+        } else if (!in.rad_wait) {
+            in.rad_pending = FALSE;     /* a radar: this is the first row */
+            in.rad_active = TRUE;
+            radar_row(text);
+            return;
+        }
+    }
     if (!strcmp(text, "SPY report")) {
         in.in_spy = TRUE;
         return;
     }
     if (in.in_spy && (try_spy_row(text) || try_spy_unit(text)))
+        return;
+    /* satellite and spy plane reports */
+    if (!strcmp(text, "Satellite sector report")
+        || !strcmp(text, "SPY Plane report")) {
+        in.in_sat = TRUE;
+        return;
+    }
+    if (strstr(text, " own shp# ")) {
+        in.sat_cls = UC_SHIP;
+        in.in_sat = TRUE;
+        return;
+    }
+    if (strstr(text, " own lnd# ")) {
+        in.sat_cls = UC_LAND;
+        in.in_sat = TRUE;
+        return;
+    }
+    if (in.in_sat && (try_sat_sect(text) || try_sat_unit(text)))
+        return;
+    if (try_flying_over(text) || try_attack(text))
         return;
     if (!strchr(text, '@') || !parse_at(text, &x, &y, &at))
         return;
@@ -482,7 +908,8 @@ intel_command_end(void)
         sqlite3_exec(db_handle(), "COMMIT", NULL, NULL, NULL);
         in.in_txn = FALSE;
     }
-    in.in_spy = FALSE;
+    in.in_spy = in.in_sat = FALSE;
+    in.rad_pending = in.rad_wait = in.rad_active = FALSE;
     if (in.changed) {
         in.changed = FALSE;
         mainwin_data_changed();
@@ -494,7 +921,8 @@ intel_clear(void)
 {
     if (!ensure_tables())
         return;
-    sqlite3_exec(db_handle(), "DELETE FROM intel_sect; DELETE FROM intel_unit;",
+    sqlite3_exec(db_handle(), "DELETE FROM intel_sect; DELETE FROM intel_unit; "
+                 "DELETE FROM intel_contact;",
                  NULL, NULL, NULL);
     mainwin_data_changed();
 }

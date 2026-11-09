@@ -625,38 +625,47 @@ on_copy(GtkWidget *w, gpointer d)
     gtk_label_set_text(GTK_LABEL(rp.status), "Copied to the clipboard.");
 }
 
+/* Save through GtkFileChooserNative: in the snap (GTK_USE_PORTAL=1) the
+ * desktop's file chooser portal, which can write anywhere the user picks
+ * without the snap having access to their home folder */
 static void
 on_save(GtkWidget *w, gpointer d)
 {
     Report *r = current_report();
-    GtkWidget *dlg;
+    GtkFileChooserNative *dlg;
+    const char *home = g_getenv("SNAP_REAL_HOME");
     char *name, *t;
     GError *err = NULL;
 
     if (!r)
         return;
-    dlg = gtk_file_chooser_dialog_new("Save Report", GTK_WINDOW(rp.win),
-                                      GTK_FILE_CHOOSER_ACTION_SAVE, "_Cancel",
-                                      GTK_RESPONSE_CANCEL, "_Save",
-                                      GTK_RESPONSE_ACCEPT, NULL);
+    dlg = gtk_file_chooser_native_new("Save Report", GTK_WINDOW(rp.win),
+                                      GTK_FILE_CHOOSER_ACTION_SAVE, "_Save",
+                                      "_Cancel");
     gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
     name = g_strdup_printf("%s.txt", kinds[r->kind].cmd);
     gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dlg), name);
     g_free(name);
     gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg),
-                                        g_get_home_dir());
-    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+                                        home && *home ? home
+                                        : g_get_home_dir());
+    if (gtk_native_dialog_run(GTK_NATIVE_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
         char *file = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
 
         t = report_text(r);
-        if (!g_file_set_contents(file, t, -1, &err)) {
+        if (!file) {
+            mainwin_error("Could not save the report",
+                          "The chosen place is not a local file.");
+        } else if (!g_file_set_contents(file, t, -1, &err)) {
             mainwin_error("Could not save the report", err->message);
             g_error_free(err);
+        } else {
+            gtk_label_set_text(GTK_LABEL(rp.status), "Saved.");
         }
         g_free(t);
         g_free(file);
     }
-    gtk_widget_destroy(dlg);
+    g_object_unref(dlg);
 }
 
 static void

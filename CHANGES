@@ -1,3 +1,9 @@
+GtkACE 0.10.2 (2026-11-08)
+
+  - Saving a report uses the desktop's own file chooser (through the
+    portal in the snap), so it can save anywhere, not just inside the
+    snap's folder.  It starts in your home folder.
+
 GtkACE 0.10.1 (2026-11-08)
 
   - Snap packaging (snap/snapcraft.yaml), as for ImpFE: core24, strict

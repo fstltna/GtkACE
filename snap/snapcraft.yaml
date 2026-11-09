@@ -36,7 +36,10 @@ apps:
                         # questions instead of refusing them
     # The game list and databases live in the snap's own folders
     # (~/snap/gtkace/current/.config and .local/share), so no home plug
-    # is needed; saving a report goes through the desktop's file chooser.
+    # is needed; saving a report goes through the desktop's file chooser
+    # portal, which can write wherever the user picks.
+    environment:
+      GTK_USE_PORTAL: "1"
 
 parts:
   gtkace:

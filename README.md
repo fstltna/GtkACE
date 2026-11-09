@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.10.1):
+Working now (0.10.2):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,

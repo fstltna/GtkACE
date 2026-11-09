@@ -4,6 +4,6 @@ Name=GtkACE
 GenericName=Empire Client
 Comment=Graphical client for the Wolfpack Empire war game
 Exec=gtkace
-Icon=applications-games
+Icon=gtkace
 Terminal=false
 Categories=Game;StrategyGame;

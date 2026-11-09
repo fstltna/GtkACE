@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.10.0):
+Working now (0.10.1):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,
@@ -96,7 +96,19 @@ development files.  On Debian or Ubuntu:
     make
     ./gtkace
 
-`sudo make install` installs to `/usr/local` (set `PREFIX` to change).
+`sudo make install` installs the program, its menu entry and its icon
+under `/usr/local` (set `PREFIX` to change).
+
+## Snap
+
+GtkACE can be built as a snap, like ImpFE:
+
+    snapcraft
+    sudo snap install --dangerous gtkace_*.snap
+
+The snap keeps its game list and databases in
+`~/snap/gtkace/current/`, not in `~/.config/gtkace` and
+`~/.local/share/gtkace`; copy them across to keep games set up before.
 
 ## Using it
 

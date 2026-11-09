@@ -1,3 +1,10 @@
+GtkACE 0.10.1 (2026-11-08)
+
+  - Snap packaging (snap/snapcraft.yaml), as for ImpFE: core24, strict
+    confinement, the GNOME extension, network access.
+  - An icon (WinACE's ace of spades), installed by make install and used
+    for the menu entry and the windows.
+
 GtkACE 0.10.0 (2026-11-07)
 
   More intelligence sources, as WinACE's EmpireParse:

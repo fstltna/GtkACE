@@ -1,0 +1,52 @@
+name: gtkace
+title: GtkACE
+summary: GUI client for the online multiplayer war game Empire
+description: |
+  GtkACE is a graphical client for Wolfpack Empire, the multi-player war
+  and economy game played over the network.  It is a GTK port of WinACE,
+  the Windows client for Empire.
+
+  It keeps a local database of your country from the server, and draws a
+  hex map of your sectors, units and everything you have seen of other
+  countries.  It has dialogs for moving, navigating, building, loading,
+  attacking, firing and flying; telegrams; colour schemes; a reports
+  window; and WinACE's tools: production summary, build projection,
+  famine relief, fortify, range table, and che and plague markers.
+adopt-info: gtkace       # the version comes from version.h
+base: core24
+grade: stable
+confinement: strict
+license: Artistic-1.0-Perl
+icon: snap/gui/gtkace.png
+website: https://EmpireDirectory.net
+source-code: https://github.com/fstltna/GtkACE
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  gtkace:
+    command: usr/bin/gtkace
+    # GTK 3 and the desktop plumbing (X11, Wayland, themes, fonts)
+    extensions: [gnome]
+    plugs:
+      - network         # talk to the Empire server
+      - network-status  # lets the desktop portal answer network-status
+                        # questions instead of refusing them
+    # The game list and databases live in the snap's own folders
+    # (~/snap/gtkace/current/.config and .local/share), so no home plug
+    # is needed; saving a report goes through the desktop's file chooser.
+
+parts:
+  gtkace:
+    plugin: make
+    source: .
+    make-parameters: [PREFIX=/usr]
+    build-packages: [libsqlite3-dev]
+    stage-packages: [libsqlite3-0]
+    override-build: |
+      # Don't reuse objects (or the prebuilt binary) from the source tree
+      make clean
+      craftctl default
+      craftctl set version="$(sed -n 's/^#define GTKACE_VERSION[[:space:]]*"\(.*\)"/\1/p' version.h)"

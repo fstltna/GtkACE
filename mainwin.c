@@ -1646,7 +1646,7 @@ mainwin_new(GtkApplication *app)
     mw.hist_pos = -1;
     mw.win = gtk_application_window_new(app);
     gtk_window_set_default_size(GTK_WINDOW(mw.win), 1000, 760);
-    gtk_window_set_icon_name(GTK_WINDOW(mw.win), "gtkace");
+    gtk_window_set_default_icon_name("gtkace");
     g_signal_connect(mw.win, "destroy", G_CALLBACK(destroyed), NULL);
     accel = gtk_accel_group_new();
     gtk_window_add_accel_group(GTK_WINDOW(mw.win), accel);

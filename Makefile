@@ -35,11 +35,14 @@ gtkace: $(OBJS)
 %.o: %.c
 	$(CC) $(ALL_CFLAGS) -c -o $@ $<
 
+ICONDIR = $(PREFIX)/share/icons/hicolor/256x256/apps
+
 install: gtkace
 	$(INSTALL) -d $(DESTDIR)$(PREFIX)/bin \
-		$(DESTDIR)$(PREFIX)/share/applications
+		$(DESTDIR)$(PREFIX)/share/applications $(DESTDIR)$(ICONDIR)
 	$(INSTALL) -m 755 gtkace $(DESTDIR)$(PREFIX)/bin/gtkace
 	$(INSTALL) -m 644 gtkace.desktop $(DESTDIR)$(PREFIX)/share/applications/
+	$(INSTALL) -m 644 gtkace.png $(DESTDIR)$(ICONDIR)/gtkace.png
 
 clean:
 	rm -f gtkace *.o *.d

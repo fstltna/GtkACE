@@ -1,3 +1,10 @@
+GtkACE 1.0.0 (2026-11-08)
+
+  First stable release, and the first in the Snap Store.  It has all of
+  WinACE's main features: the map, database and units; intelligence;
+  the command dialogs; telegrams; colour schemes; the reports window;
+  and the tools.
+
 GtkACE 0.10.3 (2026-11-08)
 
   - Snap: saving a report showed nothing on desktops whose portal has no

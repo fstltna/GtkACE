@@ -10,7 +10,7 @@ and is not supported by the WinACE authors.  See "Credits and licence" below.
 
 ## Status
 
-Working now (0.10.2):
+Working now (0.10.3):
 
 * Game list with the most recently played games first, and a login dialog
   (host, port, country, password, user, kill hung session, UTF-8, deity,
@@ -109,6 +109,8 @@ GtkACE can be built as a snap, like ImpFE:
 The snap keeps its game list and databases in
 `~/snap/gtkace/current/`, not in `~/.config/gtkace` and
 `~/.local/share/gtkace`; copy them across to keep games set up before.
+Build again after `snapcraft clean`, or snapcraft may reuse the last
+build's copy of the source.
 
 ## Using it
 

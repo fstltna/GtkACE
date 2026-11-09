@@ -34,12 +34,13 @@ apps:
       - network         # talk to the Empire server
       - network-status  # lets the desktop portal answer network-status
                         # questions instead of refusing them
+      - home            # save reports in the user's home folder
     # The game list and databases live in the snap's own folders
-    # (~/snap/gtkace/current/.config and .local/share), so no home plug
-    # is needed; saving a report goes through the desktop's file chooser
-    # portal, which can write wherever the user picks.
+    # (~/snap/gtkace/current/.config and .local/share).  Saving a report
+    # uses GTK's own file chooser through the home plug, as ImpFE does:
+    # the portal chooser does not open on every desktop.
     environment:
-      GTK_USE_PORTAL: "1"
+      GTK_USE_PORTAL: "0"
 
 parts:
   gtkace:

@@ -625,9 +625,9 @@ on_copy(GtkWidget *w, gpointer d)
     gtk_label_set_text(GTK_LABEL(rp.status), "Copied to the clipboard.");
 }
 
-/* Save through GtkFileChooserNative: in the snap (GTK_USE_PORTAL=1) the
- * desktop's file chooser portal, which can write anywhere the user picks
- * without the snap having access to their home folder */
+/* Save through GtkFileChooserNative: the desktop's chooser where GTK uses
+ * one.  In the snap it starts in the real home folder ($SNAP_REAL_HOME),
+ * not the snap's own. */
 static void
 on_save(GtkWidget *w, gpointer d)
 {

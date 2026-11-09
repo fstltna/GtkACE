@@ -1,3 +1,9 @@
+GtkACE 0.10.3 (2026-11-08)
+
+  - Snap: saving a report showed nothing on desktops whose portal has no
+    file chooser.  The snap now uses GTK's own chooser with access to the
+    home folder, as ImpFE does.
+
 GtkACE 0.10.2 (2026-11-08)
 
   - Saving a report uses the desktop's own file chooser (through the
